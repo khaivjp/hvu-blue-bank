@@ -2,9 +2,18 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const STORAGE_REPO = 'khaidev_github_repo';
+  const STORAGE_REMEMBER = 'khaidev_remember_pat_v1';
+  const STORAGE_TOKEN = 'khaidev_pat_optin_v1';
+  const SESSION_TOKEN = 'khaidev_pat_session_v1';
+  const STORAGE_PAGE = 'khaidev_selected_page_v1';
+  const CACHE_DB = 'khaidev_bank_cache_v1';
+  function fromStorage(storage, key) { try { return storage.getItem(key) || ''; } catch (_) { return ''; } }
+  function toStorage(storage, key, value) { try { if (value) storage.setItem(key,value); else storage.removeItem(key); } catch (_) {} }
+  const rememberedLongTerm = fromStorage(localStorage, STORAGE_REMEMBER) === 'yes';
+  const initialToken = rememberedLongTerm ? fromStorage(localStorage, STORAGE_TOKEN) : fromStorage(sessionStorage, SESSION_TOKEN);
   const DATA_PATH = 'data/hvu-bank.json';
   const rememberedRepo = (() => { try { return localStorage.getItem(STORAGE_REPO) || ''; } catch (_) { return ''; } })();
-  const state = { repo: rememberedRepo, token: '', bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false };
+  const state = { repo: rememberedRepo, token: initialToken, bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false, page: fromStorage(localStorage,STORAGE_PAGE)==='gpa'?'gpa':'bank', cacheSource: '' };
   const repoPattern = /^[a-z\d](?:[a-z\d-]{0,38})\/[\w.-]{1,100}$/i;
 
   const safe = value => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -15,6 +24,61 @@
   const qs = s => (state.bank[s] && state.bank[s].questions) || [];
   const total = () => names().reduce((sum,s) => sum + qs(s).length, 0);
   const matches = q => !state.search || [q.text, ...(q.options || []).map(o => o && typeof o === 'object' ? o.value : o)].join(' ').toLocaleLowerCase('vi').includes(state.search);
+
+  function openCacheDB() {
+    return new Promise((resolve,reject) => {
+      if (!window.indexedDB) return reject(Error('IndexedDB không khả dụng'));
+      const r=indexedDB.open(CACHE_DB,1);
+      r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('saved')) r.result.createObjectStore('saved'); };
+      r.onsuccess=()=>resolve(r.result);
+      r.onerror=()=>reject(r.error||Error('Không mở được bộ nhớ'));
+    });
+  }
+  async function bankCache(action, payload){
+    const db=await openCacheDB();
+    try { return await new Promise((resolve,reject)=>{
+      const tx=db.transaction('saved',action==='put'?'readwrite':'readonly');
+      const req=tx.objectStore('saved')[action==='put'?'put':'get']( ...(action==='put'?[payload,'latest']:['latest']) );
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error||Error('Bộ nhớ lỗi'));
+      tx.onabort=()=>reject(tx.error||Error('Lưu thất bại'));
+    }); } finally { db.close(); }
+  }
+  function saveBankCache(source){
+    return bankCache('put',{source,repo:state.repo, bank:state.bank,exportedAt:state.exportedAt,savedAt:Date.now()}).catch(err => {
+      // Smaller banks still work if IndexedDB is unavailable.
+      try {localStorage.setItem('khaidev_bank_fallback_v1',JSON.stringify({source,repo:state.repo,bank:state.bank,exportedAt:state.exportedAt}));}
+      catch (_) { notice('Đã tải câu hỏi, nhưng trình duyệt không thể lưu bản offline. Hãy xuất JSON từ tiện ích.',false); }
+    });
+  }
+  async function restoreCache(){
+    let c;
+    try {c=await bankCache('get');}catch(_){try{c=JSON.parse(fromStorage(localStorage,'khaidev_bank_fallback_v1')||'null');}catch(__){}}
+    if (!c || !c.bank || (c.source==='github' && c.repo!==state.repo)) return false;
+    try {state.bank=takeBank(c.bank);} catch (_) {return false;}
+    state.exportedAt=c.exportedAt||'';state.cacheSource=c.source||'local';
+    render();notice('Đã khôi phục dữ liệu câu hỏi từ bộ nhớ trên thiết bị. Có thể xem khi chưa kết nối GitHub.',true);
+    return true;
+  }
+  function persistAuth(){
+    toStorage(localStorage,STORAGE_REPO,state.repo);
+    toStorage(sessionStorage,SESSION_TOKEN,state.token);
+    const enabled=$('remember-token').checked;
+    toStorage(localStorage,STORAGE_REMEMBER, enabled?'yes':'');
+    toStorage(localStorage,STORAGE_TOKEN,enabled?state.token:'');
+  }
+  function switchPage(page){
+    state.page=page==='gpa'?'gpa':'bank';
+    toStorage(localStorage,STORAGE_PAGE,state.page);
+    $('bank-page').classList.toggle('hidden',state.page!=='bank');
+    $('gpa-page').classList.toggle('hidden',state.page!=='gpa');
+    $('nav-gpa').classList.toggle('active',state.page==='gpa');
+    $('nav-all').classList.toggle('active',state.page==='bank'&&!state.selected);
+    $('breadcrumb-page').textContent=state.page==='gpa'?'GPA Calculator':'Question Bank';
+    document.querySelectorAll('#subject-list .side-item').forEach(el=>el.classList.toggle('active',state.page==='bank'&&el.getAttribute('data-subject')===state.selected));
+    closeMobile();window.scrollTo({top:0,behavior:'instant'});
+  }
+
   function notice(message, good) {
     const el = $('alert'); el.textContent = message || ''; el.classList.toggle('hidden', !message); el.classList.toggle('ok', !!good);
   }
@@ -83,8 +147,9 @@
       state.repo = repo; state.token = token; state.bank = bank;
       state.exportedAt = incoming.exportedAt || '';
       state.selected = ''; state.visible = 25; state.connected = true;
-      try { localStorage.setItem(STORAGE_REPO, repo); } catch (_) {} // Never save the token to web storage.
+      persistAuth();
       status(true); closeModal(); render();
+      await saveBankCache('github');
       notice('Đã tải thành công ' + fmt(total()) + ' câu hỏi từ ' + repo + '.', true);
     } catch (e) {
       notice(e.message || 'Không thể kết nối GitHub.', false);
@@ -97,6 +162,7 @@
     $('settings-backdrop').classList.remove('hidden');
     $('repo-input').value = state.repo;
     $('token-input').value = state.token;
+    $('remember-token').checked = fromStorage(localStorage,STORAGE_REMEMBER)==='yes';
     setTimeout(() => $('repo-input').focus(), 20);
   }
   function closeModal() { $('settings-backdrop').classList.add('hidden'); }
@@ -164,7 +230,7 @@
   }
   function choose(name) {
     state.selected = name; state.visible = 25;
-    render(); document.querySelector('.workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    render();switchPage('bank'); document.querySelector('.workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     closeMobile();
   }
   function exportRows() {
@@ -215,7 +281,16 @@
     $('settings-backdrop').addEventListener('click', event => { if (event.target === $('settings-backdrop')) closeModal(); });
     document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeMobile(); } });
     $('connect').onclick = () => connect($('repo-input').value.trim(), $('token-input').value.trim());
-    $('clear-auth').onclick = () => { state.token = ''; $('token-input').value = ''; notice('Đã xóa token khỏi phiên đang mở.', true); };
+    $('repo-input').addEventListener('input',event=>toStorage(localStorage,STORAGE_REPO,event.target.value.trim()));
+    $('remember-token').addEventListener('change',event=>{
+      if (!event.target.checked){toStorage(localStorage,STORAGE_TOKEN,'');toStorage(localStorage,STORAGE_REMEMBER,'');}
+    });
+    $('nav-gpa').onclick=()=>switchPage('gpa');
+    $('clear-auth').onclick = () => {
+      state.token = '';state.connected=false;$('token-input').value = '';$('remember-token').checked=false;
+      toStorage(sessionStorage,SESSION_TOKEN,'');toStorage(localStorage,STORAGE_TOKEN,'');toStorage(localStorage,STORAGE_REMEMBER,'');
+      status(false);render();notice('Đã xóa token đã lưu. Câu hỏi đã lưu offline và bảng GPA vẫn được giữ lại.',true);
+    };
     $('refresh').onclick = () => { if (!state.repo) openModal(); else connect(state.repo, state.token); };
     $('search').addEventListener('input', event => { state.search = event.target.value.trim().toLocaleLowerCase('vi'); state.visible = 25; render(); });
     $('subject-grid').addEventListener('click', event => { const card = event.target.closest('[data-select]'); if (card) choose(card.getAttribute('data-select')); });
@@ -233,7 +308,7 @@
         const raw = JSON.parse(await file.text());
         state.bank = takeBank(raw); state.selected = ''; state.visible = 25;
         state.exportedAt = raw.exportedAt || raw.exportDate || ''; state.connected = false;
-        status(false); closeModal(); render(); notice('Đã mở bản JSON cục bộ (chưa đưa lên GitHub).', true);
+        status(false); closeModal(); render(); await saveBankCache('local'); notice('Đã mở và tự lưu file JSON trên thiết bị này (chưa đưa lên GitHub).', true);
       } catch (e) { notice('Không thể mở JSON: ' + e.message, false); }
       event.target.value = '';
     });
@@ -248,14 +323,18 @@
         state.bank = takeBank(fresh);
         state.exportedAt = fresh.exportedAt || '';
         if (state.selected && !state.bank[state.selected]) state.selected = '';
-        render();
-        notice('Có bản cập nhật mới từ GitHub. Ngân hàng câu hỏi đã được làm mới.', true);
+        render();await saveBankCache('github');
+        notice('Có bản cập nhật mới từ GitHub. Ngân hàng câu hỏi đã được làm mới và lưu offline.', true);
       }
     } catch (e) {
       notice('Không thể tự làm mới: ' + String(e.message || e), false);
     } finally { state.busy = false; }
   }
   setInterval(pollForUpdates, 90 * 1000);
-  bind(); render(); status(false);
-  if (state.repo) $('repo-input').value = state.repo;
+  bind();render();status(false);switchPage(state.page);
+  if (state.repo) $('repo-input').value=state.repo;
+  // Khôi phục bản cục bộ trước, sau đó mới tìm bản mới từ GitHub.
+  restoreCache().then(() => {
+    if (state.repo && state.token) connect(state.repo,state.token);
+  });
 })();

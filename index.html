@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#061b36">
+  <meta name="theme-color" content="#f5f9ff">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.github.com; img-src 'self' https: data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="description" content="KHAIDEV Blue Bank - Ngân hàng câu hỏi HVU, GitHub Sync, xuất Word và Excel.">
-  <title>KHAIDEV Blue Bank • Ngân hàng câu hỏi</title>
+  <title>KHAIDEV Blue Bank • Ngân hàng câu hỏi & GPA</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -14,6 +15,7 @@
       <div class="brand"><div class="logo">K<span>◇</span></div><div><strong>KHAIDEV</strong><small>BLUE BANK</small></div></div>
       <div class="side-label">KHÔNG GIAN HỌC TẬP</div>
       <button class="side-item active" id="nav-all" type="button"><span class="side-icon">▦</span> Tất cả môn học <span class="side-number" id="side-total">0</span></button>
+      <button class="side-item" id="nav-gpa" type="button"><span class="side-icon">◫</span> Tính điểm GPA <span class="side-number">Mới</span></button>
       <div class="side-label line">DANH SÁCH MÔN</div>
       <div class="subject-list" id="subject-list"><div class="side-muted">Chưa kết nối dữ liệu</div></div>
       <div class="sidebar-foot"><div class="dot"></div><span>GitHub Data Sync</span><span id="sync-label">Chưa kết nối</span></div>
@@ -21,10 +23,11 @@
     <div class="main-column">
       <header class="topbar">
         <button id="mobile-menu" class="icon-button mobile-only" type="button" aria-label="Mở menu">☰</button>
-        <div class="breadcrumb"><span>Workspace</span><b>/</b><span>Question Bank</span></div>
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><span id="breadcrumb-page">Question Bank</span></div>
         <div class="top-actions"><span class="top-badge" id="top-connection"><span class="dot"></span> Offline</span><button class="icon-button" id="open-settings" type="button" aria-label="Thiết lập GitHub" title="Thiết lập GitHub">⚙</button></div>
       </header>
       <main class="main-content">
+        <div id="bank-page">
         <div class="hero">
           <div class="hero-copy"><div class="eyebrow">✦ YOUR STUDY WORKSPACE</div><h1>Ngân hàng <span>câu hỏi.</span></h1><p>Tự động phân loại theo môn học. Đồng bộ từ tiện ích lên GitHub và ôn tập mọi lúc, mọi nơi.</p></div>
           <div class="hero-art" aria-hidden="true"><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="hero-symbol">K<span>◇</span></div></div>
@@ -42,7 +45,40 @@
           <div id="question-section" class="hidden"><div class="question-head"><h3 id="question-heading">Câu hỏi</h3><span class="question-count" id="question-count">0 câu</span></div><div id="question-list" class="question-list"></div><button id="load-more" class="btn btn-soft load-more hidden">Xem thêm câu hỏi ↓</button></div>
           <div class="empty" id="empty-state"><div class="empty-icon">▤</div><h3>Chưa có dữ liệu để hiển thị</h3><p>Nhấn nút ⚙ góc trên bên phải, nhập repository GitHub và token để tải ngân hàng câu hỏi.</p><button class="btn btn-primary" id="empty-settings">Kết nối GitHub</button></div>
         </section>
-        <footer class="footer">KHAIDEV BLUE BANK <span>•</span> Dữ liệu hiển thị từ GitHub, token chỉ giữ trong phiên trang hiện tại.</footer>
+        </div>
+        <section class="gpa-page hidden" id="gpa-page" aria-label="Bảng tính GPA">
+          <div class="gpa-hero">
+            <div><div class="section-eyebrow">ACADEMIC PERFORMANCE</div><h1>Bảng tính <span>GPA học kỳ</span></h1><p>Nhập tên môn, số tín chỉ và điểm thành phần / điểm thi. Bảng tự tính theo đúng công thức minh họa bạn đã gửi.</p></div>
+            <div class="gpa-save-pill" id="gpa-save-status" role="status">✓ Đã lưu trên thiết bị</div>
+          </div>
+          <div class="gpa-summary-grid" aria-label="Kết quả GPA">
+            <div class="gpa-summary-card"><span>Tổng số tín chỉ</span><strong id="gpa-credits">0</strong><small>Tín chỉ có đủ điểm</small></div>
+            <div class="gpa-summary-card"><span>GPA học kỳ hệ 4</span><strong id="gpa-four">—</strong><small>Điểm trung bình / 2,5</small></div>
+            <div class="gpa-summary-card"><span>GPA học kỳ hệ 10</span><strong id="gpa-ten">—</strong><small>Điểm trung bình có trọng số</small></div>
+          </div>
+          <section class="gpa-workspace">
+            <div class="gpa-workspace-head"><div><h2>Bảng điểm học kỳ</h2><p>Tự động lưu sau mỗi thay đổi. Có thể cuộn ngang bảng trên điện thoại.</p></div><button id="gpa-export" class="btn btn-outline" type="button">↓ Xuất bảng điểm CSV</button></div>
+            <div class="gpa-weight-bar">
+              <label for="gpa-weight-process">Hệ số thành phần <input id="gpa-weight-process" inputmode="decimal" value="0,5" aria-label="Hệ số thành phần"></label>
+              <label for="gpa-weight-exam">Hệ số thi KTHP <input id="gpa-weight-exam" inputmode="decimal" value="0,5" aria-label="Hệ số thi KTHP"></label>
+              <span>Tổng hai hệ số phải bằng 1. Điểm hợp lệ từ 0 đến 10.</span>
+            </div>
+            <div class="gpa-table-scroll" tabindex="0" aria-label="Cuộn ngang bảng tính GPA">
+              <table class="gpa-table" aria-label="Bảng tính GPA">
+                <thead><tr><th class="gpa-num">#</th><th class="gpa-name">MÔN</th><th>SỐ TC</th><th>TỔNG SỐ TC</th><th>ĐIỂM THÀNH PHẦN</th><th>ĐIỂM THI KTHP</th><th>TỔNG</th><th>GPA MÔN HỌC</th><th>GPA HỌC KỲ HỆ 4</th><th>GPA HỌC KỲ HỆ 10</th><th>XÓA</th></tr></thead>
+                <tbody id="gpa-rows"></tbody>
+              </table>
+            </div>
+            <div id="gpa-mobile-cards" class="gpa-mobile-cards" aria-label="Nhập điểm GPA trên điện thoại"></div>
+            <div class="gpa-table-actions">
+              <div><button type="button" class="btn btn-primary" id="gpa-add-one">＋ Thêm 1 môn học</button><button type="button" class="btn btn-outline" id="gpa-add-five">＋ Thêm 5 dòng</button></div>
+              <button type="button" class="btn btn-danger" id="gpa-reset">Làm trống</button>
+            </div>
+            <p class="gpa-formula">Công thức theo ảnh: <b>Điểm tổng = thành phần × hệ số + thi × hệ số</b>; <b>GPA môn hệ 4 = tổng × 0,4</b>; <b>GPA học kỳ = ∑(điểm môn × tín chỉ) / ∑ tín chỉ</b>. Đây là cách quy đổi tuyến tính theo mẫu, không thay thế quy chế xếp loại hệ 4 chính thức của trường.</p>
+            <p class="gpa-local-note">🔒 Bảng GPA chỉ được lưu trên trình duyệt và thiết bị này, chưa tự đồng bộ lên GitHub. Hãy xuất CSV để có bản sao khi đổi thiết bị.</p>
+          </section>
+        </section>
+        <footer class="footer">KHAIDEV BLUE BANK <span>•</span> Ngân hàng câu hỏi từ GitHub • GPA lưu cục bộ • Giao diện sáng</footer>
       </main>
     </div>
   </div>
@@ -51,11 +87,12 @@
     <p class="modal-desc">Dùng repo <strong>private</strong> để lưu câu hỏi. Trang GitHub Pages chỉ chứa mã giao diện, không chứa token hay dữ liệu riêng tư.</p>
     <label for="repo-input">Tên repository</label><input id="repo-input" autocomplete="off" spellcheck="false" placeholder="username/hvu-question-data">
     <label for="token-input">GitHub Personal Access Token <span>(có thể bỏ trống nếu repo public)</span></label><input id="token-input" autocomplete="off" spellcheck="false" type="password" placeholder="github_pat_...">
-    <div class="modal-hint">Token chỉ lưu tạm trong RAM của tab này, không ghi vào GitHub Pages, URL hay localStorage. Token phải có quyền <b>Contents: Read</b> đối với repo dữ liệu.</div>
+    <label class="save-token-choice" for="remember-token"><input id="remember-token" type="checkbox"> <span>Ghi nhớ token lâu dài trên trình duyệt này (chỉ nên bật trên máy riêng)</span></label>
+    <div class="modal-hint">Tên repository được tự lưu. Mặc định token chỉ được giữ trong <b>phiên trình duyệt</b> để không phải nhập lại khi tải trang. Nếu bật “Ghi nhớ token lâu dài”, token sẽ được lưu vào bộ nhớ trình duyệt; các script chạy cùng website có thể truy cập được. <b>Không dùng trên máy chung.</b> Token chỉ cần <b>Contents: Read</b> với repo dữ liệu.</div>
     <div class="modal-actions"><button class="btn btn-soft" id="clear-auth">Quên token</button><button class="btn btn-primary" id="connect" type="button">↻ Tải dữ liệu</button></div>
-    <div class="secondary-tools"><div><b>Không thể kết nối?</b><p>Bạn vẫn có thể xem ngân hàng bằng file JSON đã xuất từ tiện ích hoặc file trên GitHub.</p></div><label class="btn btn-outline" for="file-input">↑ Mở file JSON</label><input id="file-input" type="file" accept=".json,application/json" hidden></div>
+    <div class="secondary-tools"><div><b>Không thể kết nối?</b><p>Có thể mở file JSON từ tiện ích. Bản vừa mở sẽ tự lưu để lần sau vào web vẫn xem được trên thiết bị này.</p></div><label class="btn btn-outline" for="file-input">↑ Mở file JSON</label><input id="file-input" type="file" accept=".json,application/json" hidden></div>
   </div></div>
   <div id="mobile-overlay" class="mobile-overlay hidden"></div>
-  <script src="./export-utils.js"></script><script src="./app.js"></script>
+  <script src="./export-utils.js"></script><script src="./app.js"></script><script src="./gpa.js"></script>
 </body>
 </html>
