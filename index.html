@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#061b36">
+  <meta name="description" content="KHAIDEV Blue Bank - Ngân hàng câu hỏi HVU, GitHub Sync, xuất Word và Excel.">
+  <title>KHAIDEV Blue Bank • Ngân hàng câu hỏi</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="logo">K<span>◇</span></div><div><strong>KHAIDEV</strong><small>BLUE BANK</small></div></div>
+      <div class="side-label">KHÔNG GIAN HỌC TẬP</div>
+      <button class="side-item active" id="nav-all" type="button"><span class="side-icon">▦</span> Tất cả môn học <span class="side-number" id="side-total">0</span></button>
+      <div class="side-label line">DANH SÁCH MÔN</div>
+      <div class="subject-list" id="subject-list"><div class="side-muted">Chưa kết nối dữ liệu</div></div>
+      <div class="sidebar-foot"><div class="dot"></div><span>GitHub Data Sync</span><span id="sync-label">Chưa kết nối</span></div>
+    </aside>
+    <div class="main-column">
+      <header class="topbar">
+        <button id="mobile-menu" class="icon-button mobile-only" type="button" aria-label="Mở menu">☰</button>
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><span>Question Bank</span></div>
+        <div class="top-actions"><span class="top-badge" id="top-connection"><span class="dot"></span> Offline</span><button class="icon-button" id="open-settings" type="button" aria-label="Thiết lập GitHub" title="Thiết lập GitHub">⚙</button></div>
+      </header>
+      <main class="main-content">
+        <div class="hero">
+          <div class="hero-copy"><div class="eyebrow">✦ YOUR STUDY WORKSPACE</div><h1>Ngân hàng <span>câu hỏi.</span></h1><p>Tự động phân loại theo môn học. Đồng bộ từ tiện ích lên GitHub và ôn tập mọi lúc, mọi nơi.</p></div>
+          <div class="hero-art" aria-hidden="true"><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="hero-symbol">K<span>◇</span></div></div>
+        </div>
+        <section class="stats">
+          <article class="stat"><div class="stat-icon indigo">▦</div><div><span>Tổng môn học</span><strong id="stat-subjects">0</strong><small id="stat-source">Đã lưu trên cloud</small></div></article>
+          <article class="stat"><div class="stat-icon cyan">▤</div><div><span>Tổng câu hỏi</span><strong id="stat-questions">0</strong><small>Phân loại theo môn học</small></div></article>
+          <article class="stat"><div class="stat-icon light">◷</div><div><span>Cập nhật cuối</span><strong id="stat-date" class="date">—</strong><small id="stat-ago">Chưa có bản lưu</small></div></article>
+        </section>
+        <section class="workspace">
+          <div class="section-head"><div><div class="section-eyebrow">QUESTION LIBRARY</div><h2 id="section-title">Tất cả môn học</h2><p id="section-subtitle">Dữ liệu được đồng bộ tự động từ Chrome extension.</p></div><button class="btn btn-soft" id="refresh" type="button">↻ <span>Làm mới</span></button></div>
+          <div class="toolbar"><div class="search"><span>⌕</span><input id="search" placeholder="Tìm tên môn, nội dung câu hỏi..." aria-label="Tìm kiếm" autocomplete="off"></div><div class="export-actions"><button class="btn btn-outline" id="export-word" type="button">↓ Word</button><button class="btn btn-primary" id="export-excel" type="button">↓ Excel</button></div></div>
+          <div id="alert" role="status" class="alert hidden"></div>
+          <div id="subject-grid" class="subject-grid"></div>
+          <div id="question-section" class="hidden"><div class="question-head"><h3 id="question-heading">Câu hỏi</h3><span class="question-count" id="question-count">0 câu</span></div><div id="question-list" class="question-list"></div><button id="load-more" class="btn btn-soft load-more hidden">Xem thêm câu hỏi ↓</button></div>
+          <div class="empty" id="empty-state"><div class="empty-icon">▤</div><h3>Chưa có dữ liệu để hiển thị</h3><p>Nhấn nút ⚙ góc trên bên phải, nhập repository GitHub và token để tải ngân hàng câu hỏi.</p><button class="btn btn-primary" id="empty-settings">Kết nối GitHub</button></div>
+        </section>
+        <footer class="footer">KHAIDEV BLUE BANK <span>•</span> Dữ liệu hiển thị từ GitHub, token chỉ giữ trong phiên trang hiện tại.</footer>
+      </main>
+    </div>
+  </div>
+  <div class="modal-backdrop hidden" id="settings-backdrop"><div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head"><div><span class="section-eyebrow">CONNECT YOUR REPOSITORY</span><h2 id="settings-title">Kết nối GitHub</h2></div><button class="icon-button" id="close-settings" aria-label="Đóng" type="button">✕</button></div>
+    <p class="modal-desc">Dùng repo <strong>private</strong> để lưu câu hỏi. Trang GitHub Pages chỉ chứa mã giao diện, không chứa token hay dữ liệu riêng tư.</p>
+    <label for="repo-input">Tên repository</label><input id="repo-input" autocomplete="off" spellcheck="false" placeholder="username/hvu-question-data">
+    <label for="token-input">GitHub Personal Access Token <span>(có thể bỏ trống nếu repo public)</span></label><input id="token-input" autocomplete="off" spellcheck="false" type="password" placeholder="github_pat_...">
+    <div class="modal-hint">Token chỉ lưu tạm trong RAM của tab này, không ghi vào GitHub Pages, URL hay localStorage. Token phải có quyền <b>Contents: Read</b> đối với repo dữ liệu.</div>
+    <div class="modal-actions"><button class="btn btn-soft" id="clear-auth">Quên token</button><button class="btn btn-primary" id="connect" type="button">↻ Tải dữ liệu</button></div>
+    <div class="secondary-tools"><div><b>Không thể kết nối?</b><p>Bạn vẫn có thể xem ngân hàng bằng file JSON đã xuất từ tiện ích hoặc file trên GitHub.</p></div><label class="btn btn-outline" for="file-input">↑ Mở file JSON</label><input id="file-input" type="file" accept=".json,application/json" hidden></div>
+  </div></div>
+  <div id="mobile-overlay" class="mobile-overlay hidden"></div>
+  <script src="./export-utils.js"></script><script src="./app.js"></script>
+</body>
+</html>
