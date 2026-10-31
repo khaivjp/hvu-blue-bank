@@ -5,7 +5,6 @@
   const STORAGE_REMEMBER = 'khaidev_remember_pat_v1';
   const STORAGE_TOKEN = 'khaidev_pat_optin_v1';
   const SESSION_TOKEN = 'khaidev_pat_session_v1';
-  const STORAGE_PAGE = 'khaidev_selected_page_v1';
   const CACHE_DB = 'khaidev_bank_cache_v1';
   function fromStorage(storage, key) { try { return storage.getItem(key) || ''; } catch (_) { return ''; } }
   function toStorage(storage, key, value) { try { if (value) storage.setItem(key,value); else storage.removeItem(key); } catch (_) {} }
@@ -13,7 +12,7 @@
   const initialToken = rememberedLongTerm ? fromStorage(localStorage, STORAGE_TOKEN) : fromStorage(sessionStorage, SESSION_TOKEN);
   const DATA_PATH = 'data/hvu-bank.json';
   const rememberedRepo = (() => { try { return localStorage.getItem(STORAGE_REPO) || ''; } catch (_) { return ''; } })();
-  const state = { repo: rememberedRepo, token: initialToken, bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false, page: fromStorage(localStorage,STORAGE_PAGE)==='gpa'?'gpa':'bank', cacheSource: '' };
+  const state = { repo: rememberedRepo, token: initialToken, bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false, cacheSource: '' };
   const repoPattern = /^[a-z\d](?:[a-z\d-]{0,38})\/[\w.-]{1,100}$/i;
 
   const safe = value => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -67,18 +66,6 @@
     toStorage(localStorage,STORAGE_REMEMBER, enabled?'yes':'');
     toStorage(localStorage,STORAGE_TOKEN,enabled?state.token:'');
   }
-  function switchPage(page){
-    state.page=page==='gpa'?'gpa':'bank';
-    toStorage(localStorage,STORAGE_PAGE,state.page);
-    $('bank-page').classList.toggle('hidden',state.page!=='bank');
-    $('gpa-page').classList.toggle('hidden',state.page!=='gpa');
-    $('nav-gpa').classList.toggle('active',state.page==='gpa');
-    $('nav-all').classList.toggle('active',state.page==='bank'&&!state.selected);
-    $('breadcrumb-page').textContent=state.page==='gpa'?'GPA Calculator':'Question Bank';
-    document.querySelectorAll('#subject-list .side-item').forEach(el=>el.classList.toggle('active',state.page==='bank'&&el.getAttribute('data-subject')===state.selected));
-    closeMobile();window.scrollTo({top:0,behavior:'instant'});
-  }
-
   function notice(message, good) {
     const el = $('alert'); el.textContent = message || ''; el.classList.toggle('hidden', !message); el.classList.toggle('ok', !!good);
   }
@@ -230,7 +217,7 @@
   }
   function choose(name) {
     state.selected = name; state.visible = 25;
-    render();switchPage('bank'); document.querySelector('.workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    render();closeMobile(); document.querySelector('.workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     closeMobile();
   }
   function exportRows() {
@@ -285,11 +272,10 @@
     $('remember-token').addEventListener('change',event=>{
       if (!event.target.checked){toStorage(localStorage,STORAGE_TOKEN,'');toStorage(localStorage,STORAGE_REMEMBER,'');}
     });
-    $('nav-gpa').onclick=()=>switchPage('gpa');
     $('clear-auth').onclick = () => {
       state.token = '';state.connected=false;$('token-input').value = '';$('remember-token').checked=false;
       toStorage(sessionStorage,SESSION_TOKEN,'');toStorage(localStorage,STORAGE_TOKEN,'');toStorage(localStorage,STORAGE_REMEMBER,'');
-      status(false);render();notice('Đã xóa token đã lưu. Câu hỏi đã lưu offline và bảng GPA vẫn được giữ lại.',true);
+      status(false);render();notice('Đã xóa token đã lưu. Câu hỏi đã lưu offline vẫn được giữ lại.',true);
     };
     $('refresh').onclick = () => { if (!state.repo) openModal(); else connect(state.repo, state.token); };
     $('search').addEventListener('input', event => { state.search = event.target.value.trim().toLocaleLowerCase('vi'); state.visible = 25; render(); });
@@ -331,7 +317,7 @@
     } finally { state.busy = false; }
   }
   setInterval(pollForUpdates, 90 * 1000);
-  bind();render();status(false);switchPage(state.page);
+  bind();render();status(false);
   if (state.repo) $('repo-input').value=state.repo;
   // Khôi phục bản cục bộ trước, sau đó mới tìm bản mới từ GitHub.
   restoreCache().then(() => {
