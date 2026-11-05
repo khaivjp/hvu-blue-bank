@@ -20,7 +20,7 @@
   const fname = val => String(val || 'NganHang').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 65);
   const date = ms => ms ? new Date(ms).toLocaleDateString('vi-VN') : '—';
   const fmt = n => Number(n || 0).toLocaleString('vi-VN');
-  const names = () => Object.keys(state.bank).filter(s => state.bank[s] && Array.isArray(state.bank[s].questions)).sort((a,b) => (state.bank[b].lastUpdated || 0) - (state.bank[a].lastUpdated || 0));
+  const names = () => Object.keys(state.bank).filter(s => state.bank[s] && !state.bank[s].deletedAt && Array.isArray(state.bank[s].questions)).sort((a,b) => (state.bank[b].lastUpdated || 0) - (state.bank[a].lastUpdated || 0));
   const qs = s => (state.bank[s] && state.bank[s].questions) || [];
   const total = () => names().reduce((sum,s) => sum + qs(s).length, 0);
   const matches = q => !state.search || [q.text, ...(q.options || []).map(o => o && typeof o === 'object' ? o.value : o)].join(' ').toLocaleLowerCase('vi').includes(state.search);
@@ -267,9 +267,10 @@
       const ok = j === right;
       return '<div class="option' + (ok ? ' correct' : '') + '"><span class="letter">' + String.fromCharCode(65 + j) + '.</span><div>' + safe(value) + suffix + '</div>' + (ok ? '<span class="tick">✓ Đáp án đúng</span>' : '') + '</div>';
     }).join('');
-    return '<article class="question"><p class="question-title"><span class="n">Câu ' + (i+1) + ':</span> ' + safe(q.text) + '</p>' + renderMedia(q.media) + '<div class="options">' + options + '</div></article>';
+    return '<article class="question"><p class="question-title"><span class="n">Câu ' + (i+1) + ':</span> ' + safe(q.text) + '</p>' + renderMedia(q.media) + '<div class="options">' + options + '</div><div class="delete-actions"><button type="button" class="btn btn-danger" data-delete-question="' + i + '">Xóa câu hỏi</button></div></article>';
   }
   function render() {
+    if (state.selected && (!state.bank[state.selected] || state.bank[state.selected].deletedAt)) state.selected = '';
     const all = names();
     const filteredNames = all.filter(n => !state.search || n.toLocaleLowerCase('vi').includes(state.search) || qs(n).some(matches));
     $('side-total').textContent = all.length;
@@ -290,16 +291,33 @@
     if (!state.selected) {
       $('subject-grid').innerHTML = filteredNames.length ? filteredNames.map(renderCard).join('') : '<div class="side-muted">Không tìm thấy môn phù hợp.</div>';
     } else {
-      const questions = qs(state.selected).filter(matches);
+      const questions = qs(state.selected).map((q,index)=>({q,index})).filter(({q})=>matches(q));
       $('question-count').textContent = fmt(questions.length) + ' câu';
       $('question-heading').textContent = 'Danh sách câu hỏi';
-      $('question-list').innerHTML = questions.length ? questions.slice(0, state.visible).map((q,i) => renderQuestion(q,i)).join('') : '<div class="side-muted">Không có câu hỏi phù hợp.</div>';
+      $('question-list').innerHTML = questions.length ? questions.slice(0, state.visible).map(({q,index}) => renderQuestion(q,index)).join('') : '<div class="side-muted">Không có câu hỏi phù hợp.</div>';
       $('load-more').classList.toggle('hidden', questions.length <= state.visible);
     }
     $('export-word').disabled = !all.length;
     $('export-excel').disabled = !all.length;
     hydrateImages();
     document.dispatchEvent(new CustomEvent('hvu:bank'));
+  }
+  async function deleteItem(subject, index) {
+    if (state.busy) { notice('Đang đồng bộ dữ liệu. Hãy thử xóa sau khi hoàn tất.', false); return; }
+    if (!state.bank[subject] || state.bank[subject].deletedAt) return;
+    const whole = index === undefined, question = qs(subject)[index];
+    if (!whole && !question) return;
+    const message = whole
+      ? `Xóa môn “${subject}” và toàn bộ ${qs(subject).length} câu hỏi trong môn?`
+      : `Xóa câu hỏi này trong môn “${subject}”?\n\n${question.text}`;
+    if (!confirm(message + '\n\nThay đổi được lưu trên thiết bị và áp dụng lên GitHub khi đẩy dữ liệu. Không thể hoàn tác.')) return;
+    if (whole) HVUBank.deleteSubject(state.bank, subject);
+    else HVUBank.deleteQuestion(state.bank, subject, index);
+    state.dirty = true; state.revision++;
+    render();
+    const cached = await saveBankCache('local');
+    notice((whole ? 'Đã xóa môn. ' : 'Đã xóa câu hỏi. ') + (cached ? 'Đã lưu trên thiết bị. ' : 'Không lưu được offline; hãy sao lưu JSON. ') + 'Vào Sửa đáp án đúng → Đẩy dữ liệu lên để lưu bản chung.', cached);
+    document.dispatchEvent(new CustomEvent('hvu:deleted', {detail:{subject}}));
   }
   function choose(name) {
     state.selected = name; state.visible = 25;
@@ -376,6 +394,8 @@
     $('subject-grid').addEventListener('keydown', event => { if (event.key !== 'Enter' && event.key !== ' ') return; const card = event.target.closest('[data-select]'); if (card) { event.preventDefault(); choose(card.getAttribute('data-select')); }});
     $('subject-list').addEventListener('click', event => { const item = event.target.closest('[data-subject]'); if (item) choose(item.getAttribute('data-subject')); });
     $('nav-all').onclick = () => choose('');
+    $('delete-subject').onclick = () => deleteItem(state.selected);
+    $('question-list').onclick = event => { const btn = event.target.closest('[data-delete-question]'); if (btn) deleteItem(state.selected, Number(btn.dataset.deleteQuestion)); };
     $('load-more').onclick = () => { state.visible += 25; render(); };
     $('export-word').onclick = downloadDocx;
     $('export-excel').onclick = downloadXlsx;
@@ -409,7 +429,7 @@
       notice('Không thể tự làm mới: ' + String(e.message || e), false);
     } finally { state.busy = false; }
   }
-  window.BankApp = { state, safe, names, qs, renderMedia, hydrateImages, notice, render, switchPage, saveBankCache, openModal, status };
+  window.BankApp = { state, safe, names, qs, deleteItem, renderMedia, hydrateImages, notice, render, switchPage, saveBankCache, openModal, status };
   setInterval(pollForUpdates, 90 * 1000);
   bind();render();status(false);switchPage(state.page);
   if (state.repo) $('repo-input').value=state.repo;

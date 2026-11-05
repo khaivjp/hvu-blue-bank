@@ -48,7 +48,7 @@
       const local = typeof getLocal === 'function' ? await getLocal() : getLocal;
       const bank = HVUBank.merge(current.bank, local);
       const count = Object.values(bank).reduce((sum, s) => sum + s.questions.length, 0);
-      if (!count) throw Error('Ngân hàng đang trống. Chưa có dữ liệu để đẩy.');
+      if (!count && !Object.values(bank).some(s => s.deletedAt || s.deletedQuestions?.length)) throw Error('Ngân hàng đang trống. Chưa có dữ liệu để đẩy.');
       const payload = { schemaVersion: 1, exportedAt: new Date().toISOString(), source: 'KHAIDEV HVU Blue Bank v4.6', bank };
       const body = { message: 'bank: đồng bộ ' + count + ' câu hỏi và đáp án', content: encode(JSON.stringify(payload)) };
       if (current.sha) body.sha = current.sha;

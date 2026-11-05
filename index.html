@@ -43,7 +43,7 @@
           <div class="section-head"><div><div class="section-eyebrow">QUESTION LIBRARY</div><h2 id="section-title">Tất cả môn học</h2><p id="section-subtitle">Dữ liệu được đồng bộ tự động từ Chrome extension.</p></div><button class="btn btn-soft" id="refresh" type="button">↻ <span>Làm mới</span></button></div>
           <div class="toolbar"><div class="search"><span>⌕</span><input id="search" placeholder="Tìm tên môn, nội dung câu hỏi..." aria-label="Tìm kiếm" autocomplete="off"></div><div class="export-actions"><button class="btn btn-outline" id="export-word" type="button">↓ Word</button><button class="btn btn-primary" id="export-excel" type="button">↓ Excel</button></div></div>
           <div id="subject-grid" class="subject-grid"></div>
-          <div id="question-section" class="hidden"><div class="question-head"><h3 id="question-heading">Câu hỏi</h3><span class="question-count" id="question-count">0 câu</span></div><div id="question-list" class="question-list"></div><button id="load-more" class="btn btn-soft load-more hidden">Xem thêm câu hỏi ↓</button></div>
+          <div id="question-section" class="hidden"><div class="question-head"><h3 id="question-heading">Câu hỏi</h3><button id="delete-subject" class="btn btn-danger" type="button">Xóa môn</button><span class="question-count" id="question-count">0 câu</span></div><div id="question-list" class="question-list"></div><button id="load-more" class="btn btn-soft load-more hidden">Xem thêm câu hỏi ↓</button></div>
           <div class="empty" id="empty-state"><div class="empty-icon">▤</div><h3>Chưa có dữ liệu để hiển thị</h3><p>Nhấn nút ⚙ góc trên bên phải, nhập repository GitHub và token để tải ngân hàng câu hỏi.</p><button class="btn btn-primary" id="empty-settings">Kết nối GitHub</button></div>
         </section>
         </div>
@@ -74,7 +74,7 @@
             <label class="auto-push"><input type="checkbox" id="auto-push" checked> Tự đẩy sau khi lưu đáp án</label>
             <button id="download-json" class="btn btn-outline" type="button">↓ Sao lưu JSON</button>
           </div>
-          <div class="form-grid editor-filters"><label class="field">Môn học<select id="edit-subject"></select></label><label class="field">Tìm câu hỏi<input id="edit-search" type="search" placeholder="Nhập nội dung câu hỏi..."></label></div>
+          <button id="edit-delete-subject" class="btn btn-danger" type="button">Xóa môn đang chọn</button><div class="form-grid editor-filters"><label class="field">Môn học<select id="edit-subject"></select></label><label class="field">Tìm câu hỏi<input id="edit-search" type="search" placeholder="Nhập nội dung câu hỏi..."></label></div>
           <p class="study-note" id="edit-count"></p>
           <div id="edit-list" class="question-list"></div>
           <button id="edit-more" class="btn btn-soft load-more hidden" type="button">Xem thêm câu hỏi ↓</button>

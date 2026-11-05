@@ -20,7 +20,28 @@
       }));
     }
     if (Object.keys(raw).length && !Object.keys(bank).length) throw Error('Không tìm thấy môn học hợp lệ trong dữ liệu.');
+    for (const subject of Object.values(bank)) applyDeletions(subject);
     return bank;
+  }
+  function applyDeletions(subject) {
+    const removed = new Set(subject.deletedQuestions || []);
+    subject.questions = subject.deletedAt ? [] : subject.questions.filter(q => !removed.has(questionKey(q)) && !removed.has('text:' + signature(q)));
+    return subject;
+  }
+  function deleteQuestion(bank, subject, index) {
+    const entry = bank[subject], q = entry?.questions[index];
+    if (!q) return false;
+    entry.deletedQuestions = [...new Set([...(entry.deletedQuestions || []), questionKey(q), 'text:' + signature(q)])];
+    entry.lastUpdated = Date.now();
+    applyDeletions(entry);
+    return true;
+  }
+  function deleteSubject(bank, subject) {
+    if (!bank[subject] || bank[subject].deletedAt) return false;
+    bank[subject].deletedAt = Date.now();
+    bank[subject].lastUpdated = bank[subject].deletedAt;
+    applyDeletions(bank[subject]);
+    return true;
   }
   function correctIndex(q) {
     if (!q || !Array.isArray(q.options) || q.answerCleared === true) return -1;
@@ -103,8 +124,11 @@
       bank[name] = { ...clone(l), ...clone(r), questions,
         lastUpdated: Math.max(Number(r.lastUpdated) || 0, Number(l.lastUpdated) || 0),
         examCount: Math.max(Number(r.examCount) || 0, Number(l.examCount) || 0),
+        deletedAt: Math.max(Number(r.deletedAt) || 0, Number(l.deletedAt) || 0),
+        deletedQuestions: [...new Set([...(r.deletedQuestions || []), ...(l.deletedQuestions || [])])],
         seenTestIds: [...new Set([...(r.seenTestIds || []), ...(l.seenTestIds || [])])] };
     }
+    Object.values(bank).forEach(applyDeletions);
     return bank;
   }
   function shuffle(items, random = Math.random) {
@@ -128,5 +152,5 @@
       return s;
     }, { total: items.length, known: 0, correct: 0, wrong: 0, unknown: 0, unanswered: 0 });
   }
-  root.HVUBank = { normalize, merge, mergeQuestion, correctIndex, setAnswer, questionKey, optionKey, valueOf, clone, makeQuiz, score };
+  root.HVUBank = { normalize, merge, deleteQuestion, deleteSubject, mergeQuestion, correctIndex, setAnswer, questionKey, optionKey, valueOf, clone, makeQuiz, score };
 })(globalThis);

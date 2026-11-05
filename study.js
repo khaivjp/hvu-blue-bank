@@ -58,16 +58,17 @@
   function renderSync() {
     $('edit-sync-state').textContent = A.state.dirty ? 'Có thay đổi đang chờ đẩy lên GitHub' : 'Không có thay đổi đang chờ đẩy';
     $('edit-sync-state').classList.toggle('pending', A.state.dirty);
-    $('push-data').disabled = A.state.busy || !A.names().length;
-    $('download-json').disabled = !A.names().length;
+    $('push-data').disabled = A.state.busy || (!A.names().length && !A.state.dirty);
+    $('download-json').disabled = !Object.keys(A.state.bank).length;
   }
   function renderEditor() {
     const subject = $('edit-subject').value, search = $('edit-search').value.trim().toLocaleLowerCase('vi');
     const rows = A.qs(subject).map((q,index)=>({q,index})).filter(({q})=>!search || [q.text,...q.options.map(C.valueOf)].join(' ').toLocaleLowerCase('vi').includes(search));
+    $('edit-delete-subject').disabled = !subject || !A.names().includes(subject);
     $('edit-count').textContent = `${rows.length} câu hỏi · Chọn “Chưa xác định” để bỏ đáp án sai. Các thay đổi được lưu riêng theo từng câu.`;
     $('edit-list').innerHTML = rows.length ? rows.slice(0,editVisible).map(({q,index})=>{
       const key=draftKey(subject,q), selected=drafts.has(key)?drafts.get(key):C.correctIndex(q);
-      return `<article class="question edit-card" data-question="${index}"><p class="question-title"><span class="n">Câu ${index+1}:</span> ${safe(q.text)}</p>${A.renderMedia(q.media)}<fieldset class="edit-options"><legend>Đáp án đúng</legend>${q.options.map((option,i)=>`<label class="edit-option"><input type="radio" name="edit-${index}" value="${i}" ${i===selected?'checked':''}><span class="letter">${label(i)}.</span><span class="choice-content">${optionContent(option)}</span></label>`).join('')}<label class="edit-option unknown-choice"><input type="radio" name="edit-${index}" value="-1" ${selected<0?'checked':''}> Chưa xác định đáp án đúng</label></fieldset><div class="edit-actions"><span class="study-note">${drafts.has(key)?'Có lựa chọn chưa lưu':q.answerSource==='manual'?'Đã sửa thủ công':C.correctIndex(q)>=0?'Đã có đáp án':'Chưa có đáp án'}</span><button class="btn btn-primary" data-save-answer="${index}" type="button">Lưu đáp án</button></div></article>`;
+      return `<article class="question edit-card" data-question="${index}"><p class="question-title"><span class="n">Câu ${index+1}:</span> ${safe(q.text)}</p>${A.renderMedia(q.media)}<fieldset class="edit-options"><legend>Đáp án đúng</legend>${q.options.map((option,i)=>`<label class="edit-option"><input type="radio" name="edit-${index}" value="${i}" ${i===selected?'checked':''}><span class="letter">${label(i)}.</span><span class="choice-content">${optionContent(option)}</span></label>`).join('')}<label class="edit-option unknown-choice"><input type="radio" name="edit-${index}" value="-1" ${selected<0?'checked':''}> Chưa xác định đáp án đúng</label></fieldset><div class="edit-actions"><span class="study-note">${drafts.has(key)?'Có lựa chọn chưa lưu':q.answerSource==='manual'?'Đã sửa thủ công':C.correctIndex(q)>=0?'Đã có đáp án':'Chưa có đáp án'}</span><button class="btn btn-danger" data-edit-delete="${index}" type="button">Xóa câu hỏi</button><button class="btn btn-primary" data-save-answer="${index}" type="button">Lưu đáp án</button></div></article>`;
     }).join('') : '<div class="empty"><h3>Chưa có câu hỏi phù hợp</h3><p>Chọn môn học khác hoặc tải dữ liệu từ GitHub.</p></div>';
     $('edit-more').classList.toggle('hidden', rows.length<=editVisible); A.hydrateImages(); renderSync();
   }
@@ -122,11 +123,21 @@
   $('edit-search').oninput=()=>{editVisible=20;renderEditor();};
   $('edit-more').onclick=()=>{editVisible+=20;renderEditor();};
   $('edit-list').onchange=e=>{const card=e.target.closest('[data-question]');if(!card)return;const subject=$('edit-subject').value;drafts.set(draftKey(subject,A.qs(subject)[Number(card.dataset.question)]),Number(e.target.value));card.querySelector('.edit-actions .study-note').textContent='Có lựa chọn chưa lưu';};
-  $('edit-list').onclick=e=>{const btn=e.target.closest('[data-save-answer]');if(btn)saveAnswer(Number(btn.dataset.saveAnswer),btn);};
+  $('edit-delete-subject').onclick=()=>A.deleteItem($('edit-subject').value);
+  $('edit-list').onclick=e=>{const del=e.target.closest('[data-edit-delete]');if(del){A.deleteItem($('edit-subject').value,Number(del.dataset.editDelete));return;}const btn=e.target.closest('[data-save-answer]');if(btn)saveAnswer(Number(btn.dataset.saveAnswer),btn);};
   $('push-data').onclick=()=>pushData(true); $('download-json').onclick=downloadJson;
   try { $('auto-push').checked=localStorage.getItem('hvu_auto_push')!=='off'; } catch(_) {}
   $('auto-push').onchange=()=>{try{localStorage.setItem('hvu_auto_push',$('auto-push').checked?'on':'off');}catch(_){}if(!$('auto-push').checked)clearTimeout(pushTimer);};
   function refresh() {populateSubjects('quiz-subject');populateSubjects('edit-subject');setupInfo();if(A.state.page==='editor')renderEditor();else renderSync();}
+  document.addEventListener('hvu:deleted',e=>{
+    for (const key of drafts.keys()) { const [subject,id]=JSON.parse(key); if(subject===e.detail.subject && !A.qs(subject).some(q=>C.questionKey(q)===id)) drafts.delete(key); }
+    if (quiz?.subject===e.detail.subject) {
+      quiz=null; submitted=false;
+      $('quiz-setup').classList.remove('hidden'); $('quiz-session').classList.add('hidden'); $('quiz-result').classList.add('hidden');
+    }
+    refresh();
+    if ($('auto-push').checked && A.state.token) { clearTimeout(pushTimer); pushTimer=setTimeout(()=>pushData(false),700); }
+  });
   document.addEventListener('hvu:bank',refresh);
   document.addEventListener('hvu:page',e=>{if(e.detail==='editor')renderEditor();if(e.detail==='quiz')setupInfo();});
   window.addEventListener('beforeunload',e=>{if(drafts.size){e.preventDefault();e.returnValue='';}});
