@@ -7,7 +7,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.github.com; img-src 'self' https: data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="description" content="KHAIDEV Blue Bank - Ngân hàng câu hỏi HVU, GitHub Sync, xuất Word và Excel.">
   <title>KHAIDEV Blue Bank • Ngân hàng câu hỏi & Quiz</title>
-  <link rel="stylesheet" href="./style.css?v=select-delete-1">
+  <link rel="stylesheet" href="./style.css?v=sync-fix-2">
 </head>
 <body>
   <div class="layout">
@@ -42,6 +42,7 @@
         <section class="workspace">
           <div class="section-head"><div><div class="section-eyebrow">QUESTION LIBRARY</div><h2 id="section-title">Tất cả môn học</h2><p id="section-subtitle">Dữ liệu được đồng bộ tự động từ Chrome extension.</p></div><button class="btn btn-soft" id="refresh" type="button">↻ <span>Làm mới</span></button></div>
           <div class="toolbar"><div class="search"><span>⌕</span><input id="search" placeholder="Tìm tên môn, nội dung câu hỏi..." aria-label="Tìm kiếm" autocomplete="off"></div><div class="export-actions"><button class="btn btn-outline" id="export-word" type="button">↓ Word</button><button class="btn btn-primary" id="export-excel" type="button">↓ Excel</button></div></div>
+          <div class="sync-panel bank-sync-panel"><div><b id="bank-sync-state" role="status">Không có thay đổi đang chờ đẩy</b><p class="study-note">Đồng bộ câu hỏi đã sửa và đã xóa lên GitHub.</p></div><button id="bank-push-data" class="btn btn-primary" type="button">↑ Đẩy thay đổi</button></div>
           <div id="subject-grid" class="subject-grid"></div>
           <div id="question-section" class="hidden"><div class="question-head"><h3 id="question-heading">Câu hỏi</h3><button id="delete-subject" class="btn btn-danger" type="button">Xóa môn</button><span class="question-count" id="question-count">0 câu</span></div><div class="selection-toolbar"><span id="selection-count" role="status" aria-live="polite">Đã chọn 0 câu</span><button id="clear-selection" class="btn btn-outline" type="button" disabled>Bỏ chọn</button><button id="delete-selected" class="btn btn-danger" type="button" disabled>Xóa câu đã chọn (0)</button></div><div id="question-list" class="question-list"></div><button id="load-more" class="btn btn-soft load-more hidden">Xem thêm câu hỏi ↓</button></div>
           <div class="empty" id="empty-state"><div class="empty-icon">▤</div><h3>Chưa có dữ liệu để hiển thị</h3><p>Nhấn nút ⚙ góc trên bên phải, nhập repository GitHub và token để tải ngân hàng câu hỏi.</p><button class="btn btn-primary" id="empty-settings">Kết nối GitHub</button></div>
@@ -67,11 +68,11 @@
           <div id="quiz-result" class="hidden" tabindex="-1"></div>
         </section>
         <section id="editor-page" class="hidden" aria-label="Sửa đáp án đúng">
-          <div class="study-heading"><div class="section-eyebrow">NGÂN HÀNG CỦA BẠN</div><h1>Sửa <span>đáp án đúng.</span></h1><p>Chọn đáp án và bấm Lưu. Đáp án đã sửa được dùng ngay cho quiz và file Word/Excel.</p></div>
+          <div class="study-heading"><div class="section-eyebrow">NGÂN HÀNG CỦA BẠN</div><h1>Sửa <span>đáp án đúng.</span></h1><p>Chọn đáp án rồi bấm Lưu hoặc Đẩy dữ liệu lên. Đáp án đã lưu được dùng ngay cho quiz và file Word/Excel.</p></div>
           <div class="study-panel sync-panel">
             <div><b id="edit-sync-state" role="status">Chưa có thay đổi cần đẩy</b><p class="study-note">Đẩy lên dữ liệu chung, rồi mở tiện ích → Đồng bộ → Lấy dữ liệu từ DATA.</p></div>
             <button id="push-data" class="btn btn-primary" type="button">↑ Đẩy dữ liệu lên</button>
-            <label class="auto-push"><input type="checkbox" id="auto-push" checked> Tự đẩy sau khi lưu đáp án</label>
+            <label class="auto-push"><input type="checkbox" id="auto-push" checked> Tự đẩy sau khi lưu hoặc xóa</label>
             <button id="download-json" class="btn btn-outline" type="button">↓ Sao lưu JSON</button>
           </div>
           <button id="edit-delete-subject" class="btn btn-danger" type="button">Xóa môn đang chọn</button><div class="form-grid editor-filters"><label class="field">Môn học<select id="edit-subject"></select></label><label class="field">Tìm câu hỏi<input id="edit-search" type="search" placeholder="Nhập nội dung câu hỏi..."></label></div>
@@ -94,6 +95,6 @@
     <div class="secondary-tools"><div><b>Không thể kết nối?</b><p>Có thể mở file JSON từ tiện ích. Bản vừa mở sẽ tự lưu để lần sau vào web vẫn xem được trên thiết bị này.</p></div><label class="btn btn-outline" for="file-input">↑ Mở file JSON</label><input id="file-input" type="file" accept=".json,application/json" hidden></div>
   </div></div>
   <div id="mobile-overlay" class="mobile-overlay hidden"></div>
-  <script src="./bank-core.js"></script><script src="./github-bank.js"></script><script src="./export-utils.js"></script><script src="./app.js?v=select-delete-1"></script><script src="./study.js"></script>
+  <script src="./bank-core.js?v=sync-fix-2"></script><script src="./github-bank.js?v=sync-fix-2"></script><script src="./export-utils.js?v=sync-fix-2"></script><script src="./app.js?v=sync-fix-2"></script><script src="./study.js?v=sync-fix-2"></script>
 </body>
 </html>

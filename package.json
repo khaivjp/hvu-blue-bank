@@ -1,0 +1,10 @@
+{
+  "name": "hvu-blue-bank",
+  "private": true,
+  "scripts": {
+    "test": "node tests/deletion.cjs && node tests/sync-ui.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "31.0.0"
+  }
+}

@@ -105,3 +105,5 @@ body{background:radial-gradient(1200px 600px at 100% -10%,#e3efff 0%,transparent
 .btn-danger{color:#b42318;background:#fff1f0;border:1px solid #f2aaa4}.btn-danger:hover{background:#ffe0dd}.delete-actions{display:flex;justify-content:flex-end;margin-top:16px}.edit-actions,.question-head{flex-wrap:wrap}.edit-actions .study-note{flex:1;min-width:120px}
 
 .selection-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0;padding:14px;border:1px solid #cadcf2;border-radius:12px;background:#f3f8ff}.selection-toolbar>span{flex:1;font-size:13px;min-width:100px}.question-pick{display:flex;align-items:center;gap:10px;min-height:44px;cursor:pointer;font-size:13px;font-weight:600;color:#365879;margin-bottom:12px}.question-pick input{width:20px;height:20px;accent-color:#1668e8}.question.question-selected{border-color:#1668e8;box-shadow:0 0 0 2px #1668e833}.selection-toolbar .btn{white-space:normal}
+
+.bank-sync-panel{padding:16px;margin:0 0 20px;background:#f3f8ff;border:1px solid #cadcf2;border-radius:12px}.bank-sync-panel .study-note{margin:6px 0 0}

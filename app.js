@@ -96,6 +96,12 @@
     $('top-connection').innerHTML = '<span class="dot"></span> ' + (value ? 'GitHub đã kết nối' : 'Offline');
     $('sync-label').textContent = value ? 'Đã kết nối' : 'Chưa kết nối';
   }
+  function setBusy(value, action = '') {
+    state.busy = value;
+    state.syncAction = value ? action : '';
+    $('connect').disabled = value;
+    document.dispatchEvent(new CustomEvent('hvu:sync'));
+  }
   function decodeBase64(base64) {
     const raw = atob(base64.replace(/\s/g, ''));
     const bytes = new Uint8Array(raw.length);
@@ -120,8 +126,7 @@
   async function connect(repo, token) {
     if (state.busy) return;
     if (state.dirty && repo !== state.repo) { notice('Hãy đẩy hoặc sao lưu JSON các đáp án đang chờ trước khi đổi repo.', false); return; }
-    state.busy = true;
-    $('connect').disabled = true;
+    setBusy(true, 'read');
     notice('Đang tải ngân hàng câu hỏi từ GitHub…', true);
     try {
       const incoming = await loadFromGitHub(repo, token);
@@ -135,11 +140,11 @@
       loadImageIndex(true).then(hydrateImages);
       await saveBankCache('github');
       notice('Đã tải thành công ' + fmt(total()) + ' câu hỏi từ ' + repo + '.', true);
+      document.dispatchEvent(new CustomEvent('hvu:connected'));
     } catch (e) {
       notice(e.message || 'Không thể kết nối GitHub.', false);
     } finally {
-      state.busy = false;
-      $('connect').disabled = false;
+      setBusy(false);
     }
   }
   function openModal() {
@@ -281,7 +286,7 @@
     const filteredNames = all.filter(n => !state.search || n.toLocaleLowerCase('vi').includes(state.search) || qs(n).some(matches));
     $('side-total').textContent = all.length;
     $('stat-subjects').textContent = fmt(all.length);
-    $('stat-source').textContent = state.connected ? 'Đã lưu trên cloud' : 'Bản dữ liệu đang mở';
+    $('stat-source').textContent = state.dirty ? 'Có thay đổi chưa đẩy' : state.connected ? 'Đã tải từ GitHub' : 'Bản dữ liệu đang mở';
     $('stat-questions').textContent = fmt(total());
     const last = all.reduce((max,s) => Math.max(max, state.bank[s].lastUpdated || 0), 0);
     $('stat-date').textContent = last ? date(last) : (state.exportedAt ? date(state.exportedAt) : '—');
@@ -329,7 +334,7 @@
     state.dirty = true; state.revision++;
     render();
     const cached = await saveBankCache('local');
-    notice(`Đã xóa ${chosen.length} câu đã chọn. ` + (cached ? 'Đã lưu trên thiết bị. ' : 'Không lưu được offline; hãy sao lưu JSON. ') + 'Đẩy dữ liệu lên GitHub để lưu bản chung.', cached);
+    notice(`Đã xóa ${chosen.length} câu đã chọn. ` + (cached ? 'Đã lưu trên thiết bị. ' : 'Không lưu được offline; hãy sao lưu JSON. ') + 'Bấm “Đẩy thay đổi” để lưu lên GitHub.', cached);
     document.dispatchEvent(new CustomEvent('hvu:deleted', {detail:{subject}}));
   }
   async function deleteItem(subject, index) {
@@ -346,7 +351,7 @@
     state.dirty = true; state.revision++;
     render();
     const cached = await saveBankCache('local');
-    notice((whole ? 'Đã xóa môn. ' : 'Đã xóa câu hỏi. ') + (cached ? 'Đã lưu trên thiết bị. ' : 'Không lưu được offline; hãy sao lưu JSON. ') + 'Vào Sửa đáp án đúng → Đẩy dữ liệu lên để lưu bản chung.', cached);
+    notice((whole ? 'Đã xóa môn. ' : 'Đã xóa câu hỏi. ') + (cached ? 'Đã lưu trên thiết bị. ' : 'Không lưu được offline; hãy sao lưu JSON. ') + 'Bấm “Đẩy thay đổi” để lưu lên GitHub.', cached);
     document.dispatchEvent(new CustomEvent('hvu:deleted', {detail:{subject}}));
   }
   function choose(name) {
@@ -457,7 +462,7 @@
   // Keep the open website up to date while the extension commits to GitHub.
   async function pollForUpdates() {
     if (!state.connected || state.busy || document.hidden || state.page==='editor') return;
-    state.busy = true;
+    setBusy(true, 'read');
     try {
       const fresh = await loadFromGitHub(state.repo, state.token);
       if ((fresh.exportedAt || '') !== state.exportedAt) {
@@ -469,9 +474,9 @@
       }
     } catch (e) {
       notice('Không thể tự làm mới: ' + String(e.message || e), false);
-    } finally { state.busy = false; }
+    } finally { setBusy(false); }
   }
-  window.BankApp = { state, safe, names, qs, deleteItem, renderMedia, hydrateImages, notice, render, switchPage, saveBankCache, openModal, status };
+  window.BankApp = { state, safe, names, qs, deleteItem, renderMedia, hydrateImages, notice, render, switchPage, saveBankCache, openModal, status, setBusy };
   setInterval(pollForUpdates, 90 * 1000);
   bind();render();status(false);switchPage(state.page);
   if (state.repo) $('repo-input').value=state.repo;

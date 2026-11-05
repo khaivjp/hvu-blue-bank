@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const A = window.BankApp, C = window.HVUBank, $ = id => document.getElementById(id), safe = A.safe;
-  let quiz = null, quizIndex = 0, submitted = false, editVisible = 20, pushTimer = null;
+  let quiz = null, quizIndex = 0, submitted = false, editVisible = 20, pushTimer = null, queuedPush = null;
   const drafts = new Map();
   const label = index => String.fromCharCode(65 + index);
   const draftKey = (subject, q) => JSON.stringify([subject, C.questionKey(q)]);
@@ -56,10 +56,39 @@
     $('quiz-setup').classList.remove('hidden'); $('quiz-session').classList.add('hidden'); $('quiz-result').classList.add('hidden'); setupInfo();
   }
   function renderSync() {
-    $('edit-sync-state').textContent = A.state.dirty ? 'Có thay đổi đang chờ đẩy lên GitHub' : 'Không có thay đổi đang chờ đẩy';
-    $('edit-sync-state').classList.toggle('pending', A.state.dirty);
-    $('push-data').disabled = A.state.busy || (!A.names().length && !A.state.dirty);
+    const pending = A.state.dirty || drafts.size > 0;
+    const message = A.state.busy
+      ? (A.state.syncAction === 'push' ? 'Đang đẩy thay đổi lên GitHub…' : 'Đang tải dữ liệu từ GitHub…')
+      : drafts.size ? `${drafts.size} đáp án đã chọn chưa lưu · Bấm đẩy để lưu và đồng bộ`
+      : pending ? 'Có thay đổi đang chờ đẩy lên GitHub' : 'Không có thay đổi đang chờ đẩy';
+    for (const id of ['edit-sync-state', 'bank-sync-state']) {
+      $(id).textContent = message;
+      $(id).classList.toggle('pending', pending);
+    }
+    for (const id of ['push-data', 'bank-push-data']) {
+      $(id).disabled = A.state.busy || (!Object.keys(A.state.bank).length && !pending);
+      $(id).textContent = A.state.busy ? 'Đang đồng bộ…' : id === 'bank-push-data' ? '↑ Đẩy thay đổi' : '↑ Đẩy dữ liệu lên';
+    }
     $('download-json').disabled = !Object.keys(A.state.bank).length;
+    $('stat-source').textContent = pending ? 'Có thay đổi chưa đẩy' : A.state.connected ? 'Đã tải từ GitHub' : 'Bản dữ liệu đang mở';
+  }
+  function queuePush(manual = false, delay = 700) {
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => pushData(manual), delay);
+  }
+  function saveDrafts() {
+    let changed = false;
+    for (const [key, answer] of drafts) {
+      const [subject, id] = JSON.parse(key);
+      const index = A.qs(subject).findIndex(q => C.questionKey(q) === id);
+      if (index < 0) continue;
+      A.state.bank[subject].questions[index] = C.setAnswer(A.qs(subject)[index], answer);
+      A.state.bank[subject].lastUpdated = Date.now();
+      changed = true;
+    }
+    drafts.clear();
+    if (changed) { A.state.dirty = true; A.state.revision++; A.render(); }
+    return changed;
   }
   function renderEditor() {
     const subject = $('edit-subject').value, search = $('edit-search').value.trim().toLocaleLowerCase('vi');
@@ -81,23 +110,45 @@
     drafts.delete(key); button.disabled=true;
     const cached=await A.saveBankCache('local'); A.render(); renderEditor();
     A.notice((cached?'Đã lưu đáp án trên thiết bị. ':'Không lưu được offline. Hãy sao lưu JSON trước khi đóng trang. ')+($('auto-push').checked&&A.state.token?'Đang chuẩn bị đẩy lên GitHub…':'Bấm “Đẩy dữ liệu lên” để cập nhật bản chung.'),true);
-    if($('auto-push').checked&&A.state.token) { clearTimeout(pushTimer); pushTimer=setTimeout(()=>pushData(false),700); }
+    if($('auto-push').checked&&A.state.token) queuePush();
   }
   async function pushData(manual=true) {
     clearTimeout(pushTimer);
-    if(A.state.busy) { if(!manual) pushTimer=setTimeout(()=>pushData(false),1200); return; }
-    if(!A.state.token) { A.notice('Đáp án vẫn được giữ trên máy. Nhập token có quyền ghi, tải dữ liệu rồi bấm Đẩy dữ liệu lên.',false); if(manual) A.openModal(); return; }
-    A.state.busy=true; renderSync(); A.notice('Đang gộp dữ liệu và đẩy đáp án lên GitHub…',true);
-    const revision=A.state.revision;
+    if(A.state.busy) {
+      queuedPush = queuedPush === true || manual;
+      if(manual) A.notice('Đang đồng bộ. Các thay đổi sẽ được đẩy ngay sau khi hoàn tất.',true);
+      return;
+    }
+    queuedPush = null;
+    // A manual push includes selected answers even if their per-question Save was not clicked.
+    const savedDrafts = manual && saveDrafts();
+    if(!A.state.token) {
+      if(savedDrafts) await A.saveBankCache('local');
+      A.notice('Thay đổi được giữ trên máy. Nhập token có quyền Contents: Read and write để đẩy lên GitHub.',false);
+      if(manual) A.openModal();
+      return;
+    }
+    A.setBusy(true, 'push');
+    A.notice('Đang đẩy các câu đã sửa và đã xóa lên GitHub…',true);
+    let sentRevision;
     try {
-      const result=await HVUGitHub.push(A.state.repo,A.state.token,()=>A.state.bank);
+      if(savedDrafts) await A.saveBankCache('local');
+      const result=await HVUGitHub.push(A.state.repo,A.state.token,()=>{
+        sentRevision=A.state.revision;
+        return C.clone(A.state.bank);
+      });
       A.state.bank=C.merge(result.bank,A.state.bank); A.state.exportedAt=result.payload.exportedAt;
-      A.state.dirty=A.state.revision!==revision; A.state.connected=true;
+      A.state.dirty=A.state.revision!==sentRevision; A.state.connected=true;
       await A.saveBankCache('github'); A.status(true); A.render();
-      A.notice('Đã đẩy dữ liệu lên GitHub. Mở tiện ích → Đồng bộ → Lấy dữ liệu từ DATA để nhận đáp án mới.',true);
-      if(A.state.dirty&&$('auto-push').checked) pushTimer=setTimeout(()=>pushData(false),1000);
-    } catch(e) { A.notice('Chưa đẩy được: '+e.message+' Các thay đổi vẫn được giữ trên máy; có thể thử lại hoặc sao lưu JSON.',false); }
-    finally { A.state.busy=false; renderSync(); }
+      A.notice(A.state.dirty
+        ? 'Đã đẩy bản vừa gửi. Còn thay đổi mới đang chờ đẩy.'
+        : 'Đã đẩy thành công các câu đã sửa và đã xóa lên GitHub.',true);
+      if(A.state.dirty&&$('auto-push').checked) queuedPush=false;
+    } catch(e) {
+      A.state.dirty=true;
+      await A.saveBankCache('local');
+      A.notice('Chưa đẩy được: '+e.message+' Các thay đổi vẫn được giữ trên máy. Bấm Đẩy dữ liệu lên để thử lại.',false);
+    } finally { A.setBusy(false); }
   }
   function downloadJson() {
     const blob=new Blob([JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),source:'KHAIDEV web',bank:A.state.bank},null,2)],{type:'application/json'});
@@ -122,12 +173,13 @@
   $('edit-subject').onchange=()=>{editVisible=20;renderEditor();};
   $('edit-search').oninput=()=>{editVisible=20;renderEditor();};
   $('edit-more').onclick=()=>{editVisible+=20;renderEditor();};
-  $('edit-list').onchange=e=>{const card=e.target.closest('[data-question]');if(!card)return;const subject=$('edit-subject').value;drafts.set(draftKey(subject,A.qs(subject)[Number(card.dataset.question)]),Number(e.target.value));card.querySelector('.edit-actions .study-note').textContent='Có lựa chọn chưa lưu';};
+  $('edit-list').onchange=e=>{const card=e.target.closest('[data-question]');if(!card)return;const subject=$('edit-subject').value;drafts.set(draftKey(subject,A.qs(subject)[Number(card.dataset.question)]),Number(e.target.value));card.querySelector('.edit-actions .study-note').textContent='Có lựa chọn chưa lưu';renderSync();};
   $('edit-delete-subject').onclick=()=>A.deleteItem($('edit-subject').value);
   $('edit-list').onclick=e=>{const del=e.target.closest('[data-edit-delete]');if(del){A.deleteItem($('edit-subject').value,Number(del.dataset.editDelete));return;}const btn=e.target.closest('[data-save-answer]');if(btn)saveAnswer(Number(btn.dataset.saveAnswer),btn);};
+  $('bank-push-data').onclick=()=>pushData(true);
   $('push-data').onclick=()=>pushData(true); $('download-json').onclick=downloadJson;
   try { $('auto-push').checked=localStorage.getItem('hvu_auto_push')!=='off'; } catch(_) {}
-  $('auto-push').onchange=()=>{try{localStorage.setItem('hvu_auto_push',$('auto-push').checked?'on':'off');}catch(_){}if(!$('auto-push').checked)clearTimeout(pushTimer);};
+  $('auto-push').onchange=()=>{try{localStorage.setItem('hvu_auto_push',$('auto-push').checked?'on':'off');}catch(_){}if(!$('auto-push').checked){clearTimeout(pushTimer);if(queuedPush===false)queuedPush=null;}else if(A.state.dirty&&A.state.token)queuePush();};
   function refresh() {populateSubjects('quiz-subject');populateSubjects('edit-subject');setupInfo();if(A.state.page==='editor')renderEditor();else renderSync();}
   document.addEventListener('hvu:deleted',e=>{
     for (const key of drafts.keys()) { const [subject,id]=JSON.parse(key); if(subject===e.detail.subject && !A.qs(subject).some(q=>C.questionKey(q)===id)) drafts.delete(key); }
@@ -136,7 +188,16 @@
       $('quiz-setup').classList.remove('hidden'); $('quiz-session').classList.add('hidden'); $('quiz-result').classList.add('hidden');
     }
     refresh();
-    if ($('auto-push').checked && A.state.token) { clearTimeout(pushTimer); pushTimer=setTimeout(()=>pushData(false),700); }
+    if ($('auto-push').checked && A.state.token) queuePush();
+  });
+  document.addEventListener('hvu:sync',()=>{
+    renderSync();
+    if(!A.state.busy && queuedPush !== null) {
+      const manual=queuedPush; queuedPush=null; queuePush(manual,0);
+    }
+  });
+  document.addEventListener('hvu:connected',()=>{
+    if(A.state.dirty && A.state.token && $('auto-push').checked) queuePush();
   });
   document.addEventListener('hvu:bank',refresh);
   document.addEventListener('hvu:page',e=>{if(e.detail==='editor')renderEditor();if(e.detail==='quiz')setupInfo();});
