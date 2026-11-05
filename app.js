@@ -14,6 +14,8 @@
   const DATA_PATH = 'data/hvu-bank.json';
   const rememberedRepo = (() => { try { return localStorage.getItem(STORAGE_REPO) || HVUGitHub.DEFAULT_REPO; } catch (_) { return ''; } })();
   const state = { repo: rememberedRepo, token: initialToken, bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false, page: ['quiz','editor'].includes(fromStorage(localStorage,STORAGE_PAGE))?fromStorage(localStorage,STORAGE_PAGE):'bank', cacheSource: '', dirty: false, revision: 0 };
+  const selectedQuestions = new Set();
+  let selectionSubject = '';
   const repoPattern = /^[a-z\d](?:[a-z\d-]{0,38})\/[\w.-]{1,100}$/i;
 
   const safe = value => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -267,10 +269,14 @@
       const ok = j === right;
       return '<div class="option' + (ok ? ' correct' : '') + '"><span class="letter">' + String.fromCharCode(65 + j) + '.</span><div>' + safe(value) + suffix + '</div>' + (ok ? '<span class="tick">✓ Đáp án đúng</span>' : '') + '</div>';
     }).join('');
-    return '<article class="question"><p class="question-title"><span class="n">Câu ' + (i+1) + ':</span> ' + safe(q.text) + '</p>' + renderMedia(q.media) + '<div class="options">' + options + '</div><div class="delete-actions"><button type="button" class="btn btn-danger" data-delete-question="' + i + '">Xóa câu hỏi</button></div></article>';
+    return '<article class="question' + (selectedQuestions.has(HVUBank.questionKey(q)) ? ' question-selected' : '') + '"><label class="question-pick"><input type="checkbox" data-pick-question="' + i + '" ' + (selectedQuestions.has(HVUBank.questionKey(q)) ? 'checked' : '') + '> Chọn câu này để xóa</label><p class="question-title"><span class="n">Câu ' + (i+1) + ':</span> ' + safe(q.text) + '</p>' + renderMedia(q.media) + '<div class="options">' + options + '</div><div class="delete-actions"><button type="button" class="btn btn-danger" data-delete-question="' + i + '">Xóa câu hỏi</button></div></article>';
   }
   function render() {
     if (state.selected && (!state.bank[state.selected] || state.bank[state.selected].deletedAt)) state.selected = '';
+    if (selectionSubject !== state.selected) { selectedQuestions.clear(); selectionSubject = state.selected; }
+    const validKeys = new Set(qs(state.selected).map(HVUBank.questionKey));
+    for (const key of selectedQuestions) if (!validKeys.has(key)) selectedQuestions.delete(key);
+    updateSelection();
     const all = names();
     const filteredNames = all.filter(n => !state.search || n.toLocaleLowerCase('vi').includes(state.search) || qs(n).some(matches));
     $('side-total').textContent = all.length;
@@ -301,6 +307,30 @@
     $('export-excel').disabled = !all.length;
     hydrateImages();
     document.dispatchEvent(new CustomEvent('hvu:bank'));
+  }
+  function updateSelection() {
+    $('delete-selected').disabled = !selectedQuestions.size;
+    $('delete-selected').textContent = `Xóa câu đã chọn (${selectedQuestions.size})`;
+    $('clear-selection').disabled = !selectedQuestions.size;
+    $('selection-count').textContent = `Đã chọn ${selectedQuestions.size} câu`;
+  }
+  async function deleteSelected() {
+    if (state.busy) { notice('Đang đồng bộ dữ liệu. Hãy thử xóa sau khi hoàn tất.', false); return; }
+    const subject = state.selected;
+    const chosen = qs(subject).filter(q => selectedQuestions.has(HVUBank.questionKey(q)));
+    if (!chosen.length) return;
+    if (!confirm(`Xóa ${chosen.length} câu đã chọn trong môn “${subject}”? Các câu không chọn được giữ nguyên.\n\nKhông thể hoàn tác.`)) return;
+    // Resolve each identity again because deleting a question changes array indices.
+    for (const q of chosen) {
+      const index = qs(subject).findIndex(item => HVUBank.questionKey(item) === HVUBank.questionKey(q));
+      if (index >= 0) HVUBank.deleteQuestion(state.bank, subject, index);
+    }
+    selectedQuestions.clear();
+    state.dirty = true; state.revision++;
+    render();
+    const cached = await saveBankCache('local');
+    notice(`Đã xóa ${chosen.length} câu đã chọn. ` + (cached ? 'Đã lưu trên thiết bị. ' : 'Không lưu được offline; hãy sao lưu JSON. ') + 'Đẩy dữ liệu lên GitHub để lưu bản chung.', cached);
+    document.dispatchEvent(new CustomEvent('hvu:deleted', {detail:{subject}}));
   }
   async function deleteItem(subject, index) {
     if (state.busy) { notice('Đang đồng bộ dữ liệu. Hãy thử xóa sau khi hoàn tất.', false); return; }
@@ -389,11 +419,23 @@
       status(false);render();notice('Đã xóa token đã lưu. Câu hỏi và đáp án đã lưu offline vẫn được giữ lại.',true);
     };
     $('refresh').onclick = () => { if (!state.repo) openModal(); else connect(state.repo, state.token); };
-    $('search').addEventListener('input', event => { state.search = event.target.value.trim().toLocaleLowerCase('vi'); state.visible = 25; render(); });
+    $('search').addEventListener('input', event => { selectedQuestions.clear(); state.search = event.target.value.trim().toLocaleLowerCase('vi'); state.visible = 25; render(); });
     $('subject-grid').addEventListener('click', event => { const card = event.target.closest('[data-select]'); if (card) choose(card.getAttribute('data-select')); });
     $('subject-grid').addEventListener('keydown', event => { if (event.key !== 'Enter' && event.key !== ' ') return; const card = event.target.closest('[data-select]'); if (card) { event.preventDefault(); choose(card.getAttribute('data-select')); }});
     $('subject-list').addEventListener('click', event => { const item = event.target.closest('[data-subject]'); if (item) choose(item.getAttribute('data-subject')); });
     $('nav-all').onclick = () => choose('');
+    $('delete-selected').onclick = deleteSelected;
+    $('clear-selection').onclick = () => { selectedQuestions.clear(); render(); };
+    $('question-list').onchange = event => {
+      const input = event.target.closest('[data-pick-question]');
+      if (!input) return;
+      const q = qs(state.selected)[Number(input.dataset.pickQuestion)];
+      if (!q) return;
+      const key = HVUBank.questionKey(q);
+      if (input.checked) selectedQuestions.add(key); else selectedQuestions.delete(key);
+      input.closest('.question').classList.toggle('question-selected', input.checked);
+      updateSelection();
+    };
     $('delete-subject').onclick = () => deleteItem(state.selected);
     $('question-list').onclick = event => { const btn = event.target.closest('[data-delete-question]'); if (btn) deleteItem(state.selected, Number(btn.dataset.deleteQuestion)); };
     $('load-more').onclick = () => { state.visible += 25; render(); };
