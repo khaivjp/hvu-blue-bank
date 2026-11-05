@@ -294,25 +294,7 @@ function _hvuNormOpt(t) {
 
 // Vị trí (từ 0) của đáp án đúng trong q.options, hoặc -1 nếu chưa biết.
 // Ưu tiên theo id lựa chọn; không có thì so theo nội dung chữ.
-function hvuCorrectIndex(q) {
-    if (!q || !Array.isArray(q.options)) return -1;
-    var opts = q.options, i, o;
-    if (q.correctId !== undefined && q.correctId !== null && q.correctId !== '') {
-        for (i = 0; i < opts.length; i++) {
-            o = opts[i];
-            if (o && typeof o === 'object' && String(o.id) === String(q.correctId)) return i;
-        }
-    }
-    var want = _hvuNormOpt(q.correctAnswer);
-    if (want) {
-        for (i = 0; i < opts.length; i++) {
-            o = opts[i];
-            var v = (o && typeof o === 'object') ? o.value : o;
-            if (_hvuNormOpt(v) === want) return i;
-        }
-    }
-    return -1;
-}
+function hvuCorrectIndex(q) { return HVUBank.correctIndex(q); }
 
 var HVU_CORRECT_MARK = ' \u2713 \u0110\u00DANG';
 var HVU_CORRECT_STYLE = 'color:#0f9d6c;font-weight:bold';
@@ -872,11 +854,9 @@ function _hvuExcelCellRef(colIndex, rowIndex) {
 
 function _hvuExcelWorksheetXml(questions) {
     var headers = ['NỘI DUNG CÂU HỎI', 'LỰA CHỌN A', 'LỰA CHỌN B', 'LỰA CHỌN C', 'LỰA CHỌN D'];
-    // Thêm cột đáp án (1/2/3/4 = A/B/C/D) chỉ khi sheet có câu đã biết đáp án đúng,
-    // để file không đổi bố cục với những môn chưa có đáp án.
-    var hasAnswers = (questions || []).some(function (q) { return hvuCorrectIndex(q) >= 0; });
-    var lastCol = hasAnswers ? 'F' : 'E';
-    if (hasAnswers) headers.push('ĐÁP ÁN ĐÚNG');
+    var hasAnswers = true;
+    var lastCol = 'F';
+    headers.push('ĐÁP ÁN ĐÚNG');
     var rows = [headers];
     (questions || []).forEach(function (q) {
         q = q || {};
@@ -902,7 +882,8 @@ function _hvuExcelWorksheetXml(questions) {
         sheet += '<row r="' + rowNo + '"' + (ri === 0 ? ' ht="28" customHeight="1"' : '') + '>';
         row.forEach(function (value, ci) {
             var ref = _hvuExcelCellRef(ci, rowNo);
-            var style = ri === 0 ? ' s="1"' : '';
+            var correct = ri > 0 ? hvuCorrectIndex(questions[ri - 1]) : -1;
+            var style = ri === 0 ? ' s="1"' : (correct >= 0 && correct < 4 && (ci === correct + 1 || ci === 5) ? ' s="2"' : '');
             sheet += '<c r="' + ref + '"' + style + ' t="inlineStr"><is><t xml:space="preserve">' + _hvuEscXml(value) + '</t></is></c>';
         });
         sheet += '</row>';
@@ -947,11 +928,11 @@ function downloadExcelWorkbook(sheets, filename) {
         + '</Relationships>';
     var styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        + '<fonts count="2"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font></fonts>'
+        + '<fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FF0F9D6C"/><name val="Calibri"/><family val="2"/></font></fonts>'
         + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2563EB"/><bgColor indexed="64"/></patternFill></fill></fills>'
         + '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFD1D5DB"/></left><right style="thin"><color rgb="FFD1D5DB"/></right><top style="thin"><color rgb="FFD1D5DB"/></top><bottom style="thin"><color rgb="FFD1D5DB"/></bottom><diagonal/></border></borders>'
         + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        + '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>'
+        + '<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>'
         + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 
     var files = [

@@ -12,8 +12,8 @@
   const rememberedLongTerm = fromStorage(localStorage, STORAGE_REMEMBER) === 'yes';
   const initialToken = rememberedLongTerm ? fromStorage(localStorage, STORAGE_TOKEN) : fromStorage(sessionStorage, SESSION_TOKEN);
   const DATA_PATH = 'data/hvu-bank.json';
-  const rememberedRepo = (() => { try { return localStorage.getItem(STORAGE_REPO) || ''; } catch (_) { return ''; } })();
-  const state = { repo: rememberedRepo, token: initialToken, bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false, page: fromStorage(localStorage,STORAGE_PAGE)==='gpa'?'gpa':'bank', cacheSource: '' };
+  const rememberedRepo = (() => { try { return localStorage.getItem(STORAGE_REPO) || HVUGitHub.DEFAULT_REPO; } catch (_) { return ''; } })();
+  const state = { repo: rememberedRepo, token: initialToken, bank: {}, exportedAt: '', selected: '', visible: 25, search: '', connected: false, busy: false, page: ['quiz','editor'].includes(fromStorage(localStorage,STORAGE_PAGE))?fromStorage(localStorage,STORAGE_PAGE):'bank', cacheSource: '', dirty: false, revision: 0 };
   const repoPattern = /^[a-z\d](?:[a-z\d-]{0,38})\/[\w.-]{1,100}$/i;
 
   const safe = value => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -39,24 +39,31 @@
     try { return await new Promise((resolve,reject)=>{
       const tx=db.transaction('saved',action==='put'?'readwrite':'readonly');
       const req=tx.objectStore('saved')[action==='put'?'put':'get']( ...(action==='put'?[payload,'latest']:['latest']) );
-      req.onsuccess=()=>resolve(req.result);
+      tx.oncomplete=()=>resolve(req.result);
       req.onerror=()=>reject(req.error||Error('Bộ nhớ lỗi'));
       tx.onabort=()=>reject(tx.error||Error('Lưu thất bại'));
     }); } finally { db.close(); }
   }
+  let cacheQueue = Promise.resolve();
   function saveBankCache(source){
-    return bankCache('put',{source,repo:state.repo, bank:state.bank,exportedAt:state.exportedAt,savedAt:Date.now()}).catch(err => {
-      // Smaller banks still work if IndexedDB is unavailable.
-      try {localStorage.setItem('khaidev_bank_fallback_v1',JSON.stringify({source,repo:state.repo,bank:state.bank,exportedAt:state.exportedAt}));}
-      catch (_) { notice('Đã tải câu hỏi, nhưng trình duyệt không thể lưu bản offline. Hãy xuất JSON từ tiện ích.',false); }
-    });
+    const payload={source,repo:state.repo,bank:HVUBank.clone(state.bank),exportedAt:state.exportedAt,savedAt:Date.now(),dirty:state.dirty};
+    const job=async()=>{
+      try {await bankCache('put',payload);toStorage(localStorage,'khaidev_bank_fallback_v1','');return true;}
+      catch (_) {
+        try {localStorage.setItem('khaidev_bank_fallback_v1',JSON.stringify(payload));return true;}
+        catch (_) {notice('Trình duyệt không lưu được bản offline. Hãy dùng nút Sao lưu JSON trước khi đóng trang.',false);return false;}
+      }
+    };
+    cacheQueue=cacheQueue.then(job,job);return cacheQueue;
   }
   async function restoreCache(){
-    let c;
-    try {c=await bankCache('get');}catch(_){try{c=JSON.parse(fromStorage(localStorage,'khaidev_bank_fallback_v1')||'null');}catch(__){}}
-    if (!c || !c.bank || (c.source==='github' && c.repo!==state.repo)) return false;
+    let c, fallback;
+    try {c=await bankCache('get');}catch(_){}
+    try {fallback=JSON.parse(fromStorage(localStorage,'khaidev_bank_fallback_v1')||'null');}catch(_){}
+    if(fallback&&(!c||(fallback.savedAt||0)>(c.savedAt||0)))c=fallback;
+    if (!c || !c.bank || (c.repo && c.repo!==state.repo)) return false;
     try {state.bank=takeBank(c.bank);} catch (_) {return false;}
-    state.exportedAt=c.exportedAt||'';state.cacheSource=c.source||'local';
+    state.exportedAt=c.exportedAt||'';state.cacheSource=c.source||'local';state.dirty=!!c.dirty;
     render();notice('Đã khôi phục dữ liệu câu hỏi từ bộ nhớ trên thiết bị. Có thể xem khi chưa kết nối GitHub.',true);
     return true;
   }
@@ -68,14 +75,15 @@
     toStorage(localStorage,STORAGE_TOKEN,enabled?state.token:'');
   }
   function switchPage(page){
-    state.page=page==='gpa'?'gpa':'bank';
+    state.page=['quiz','editor'].includes(page)?page:'bank';
     toStorage(localStorage,STORAGE_PAGE,state.page);
-    $('bank-page').classList.toggle('hidden',state.page!=='bank');
-    $('gpa-page').classList.toggle('hidden',state.page!=='gpa');
-    $('nav-gpa').classList.toggle('active',state.page==='gpa');
+    ['bank','quiz','editor'].forEach(name=>$(`${name}-page`).classList.toggle('hidden',state.page!==name));
+    $('nav-quiz').classList.toggle('active',state.page==='quiz');
+    $('nav-editor').classList.toggle('active',state.page==='editor');
     $('nav-all').classList.toggle('active',state.page==='bank'&&!state.selected);
-    $('breadcrumb-page').textContent=state.page==='gpa'?'GPA Calculator':'Question Bank';
+    $('breadcrumb-page').textContent={bank:'Ngân hàng câu hỏi',quiz:'Chơi Quizizz',editor:'Sửa đáp án đúng'}[state.page];
     document.querySelectorAll('#subject-list .side-item').forEach(el=>el.classList.toggle('active',state.page==='bank'&&el.getAttribute('data-subject')===state.selected));
+    document.dispatchEvent(new CustomEvent('hvu:page',{detail:state.page}));
     closeMobile();window.scrollTo({top:0,behavior:'instant'});
   }
 
@@ -104,49 +112,20 @@
     return data;
   }
   async function loadFromGitHub(repo, token) {
-    if (!repoPattern.test(repo)) throw Error('Repository cần theo dạng username/repository.');
-    const root = 'https://api.github.com/repos/' + repo;
-    const info = await request(root + '/contents/' + DATA_PATH, token);
-    if (info.type !== 'file') throw Error('Đường dẫn dữ liệu không phải là file.');
-    // Github Contents API omits "content" when a file exceeds 1 MB.
-    const blob = info.content ? info : await request(root + '/git/blobs/' + encodeURIComponent(info.sha), token);
-    if (!blob || typeof blob.content !== 'string') throw Error('GitHub không trả về nội dung. Hãy dùng JSON xuất từ tiện ích.');
-    return JSON.parse(decodeBase64(blob.content));
+    return (await HVUGitHub.read(repo, token)).payload;
   }
-  function takeBank(data) {
-    const raw = data && typeof data === 'object' && data.bank ? data.bank : data;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('File JSON không chứa ngân hàng câu hỏi hợp lệ.');
-    const bank = Object.create(null);
-    for (const name of Object.keys(raw)) {
-      const item = raw[name];
-      if (typeof name !== 'string' || !item || !Array.isArray(item.questions)) continue;
-      bank[name] = {
-        questions: item.questions.filter(q => q && typeof q.text === 'string').map(q => ({
-          qId: typeof q.qId === 'string' ? q.qId : '',
-          text: q.text,
-          options: Array.isArray(q.options) ? q.options : [],
-          media: Array.isArray(q.media) ? q.media : [],
-          correctAnswer: q.correctAnswer,
-          correctId: q.correctId == null ? '' : String(q.correctId),
-          answerVerifiedAt: Number(q.answerVerifiedAt) || 0,
-          answer: q.answer
-        })),
-        lastUpdated: Number(item.lastUpdated) || 0,
-        examCount: Number(item.examCount) || 0
-      };
-    }
-    if (!Object.keys(bank).length) throw Error('Không tìm thấy môn học nào trong dữ liệu JSON.');
-    return bank;
-  }
+  const takeBank = data => HVUBank.normalize(data);
   async function connect(repo, token) {
     if (state.busy) return;
+    if (state.dirty && repo !== state.repo) { notice('Hãy đẩy hoặc sao lưu JSON các đáp án đang chờ trước khi đổi repo.', false); return; }
     state.busy = true;
     $('connect').disabled = true;
     notice('Đang tải ngân hàng câu hỏi từ GitHub…', true);
     try {
       const incoming = await loadFromGitHub(repo, token);
       const bank = takeBank(incoming);
-      state.repo = repo; state.token = token; state.bank = bank;
+      state.bank = state.repo === repo ? HVUBank.merge(bank, state.bank) : bank;
+      state.repo = repo; state.token = token;
       state.exportedAt = incoming.exportedAt || '';
       state.selected = ''; state.visible = 25; state.connected = true;
       persistAuth();
@@ -300,8 +279,8 @@
     const last = all.reduce((max,s) => Math.max(max, state.bank[s].lastUpdated || 0), 0);
     $('stat-date').textContent = last ? date(last) : (state.exportedAt ? date(state.exportedAt) : '—');
     $('stat-ago').textContent = state.exportedAt ? 'Bản backup: ' + date(state.exportedAt) : 'Thời gian lưu câu hỏi';
-    $('subject-list').innerHTML = all.length ? all.map(n => '<button type="button" class="side-item ' + (state.selected === n ? 'active' : '') + '" data-subject="' + safe(n) + '"><span class="side-icon">▤</span>' + safe(n) + '</button>').join('') : '<div class="side-muted">Chưa có môn</div>';
-    $('nav-all').classList.toggle('active', !state.selected);
+    $('subject-list').innerHTML = all.length ? all.map(n => '<button type="button" class="side-item ' + (state.page==='bank' && state.selected === n ? 'active' : '') + '" data-subject="' + safe(n) + '"><span class="side-icon">▤</span>' + safe(n) + '</button>').join('') : '<div class="side-muted">Chưa có môn</div>';
+    $('nav-all').classList.toggle('active', state.page==='bank'&&!state.selected);
     $('section-title').textContent = state.selected || 'Tất cả môn học';
     $('section-subtitle').textContent = state.selected ? 'Danh sách câu hỏi đã lưu của môn học này.' : 'Chọn một môn để xem toàn bộ câu hỏi, hoặc tìm kiếm trong các môn.';
     if (state.selected && !state.bank[state.selected]) state.selected = '';
@@ -320,6 +299,7 @@
     $('export-word').disabled = !all.length;
     $('export-excel').disabled = !all.length;
     hydrateImages();
+    document.dispatchEvent(new CustomEvent('hvu:bank'));
   }
   function choose(name) {
     state.selected = name; state.visible = 25;
@@ -383,11 +363,12 @@
     $('remember-token').addEventListener('change',event=>{
       if (!event.target.checked){toStorage(localStorage,STORAGE_TOKEN,'');toStorage(localStorage,STORAGE_REMEMBER,'');}
     });
-    $('nav-gpa').onclick=()=>switchPage('gpa');
+    $('nav-quiz').onclick=()=>switchPage('quiz');
+    $('nav-editor').onclick=()=>switchPage('editor');
     $('clear-auth').onclick = () => {
       state.token = '';state.connected=false;$('token-input').value = '';$('remember-token').checked=false;
       toStorage(sessionStorage,SESSION_TOKEN,'');toStorage(localStorage,STORAGE_TOKEN,'');toStorage(localStorage,STORAGE_REMEMBER,'');
-      status(false);render();notice('Đã xóa token đã lưu. Câu hỏi đã lưu offline và bảng GPA vẫn được giữ lại.',true);
+      status(false);render();notice('Đã xóa token đã lưu. Câu hỏi và đáp án đã lưu offline vẫn được giữ lại.',true);
     };
     $('refresh').onclick = () => { if (!state.repo) openModal(); else connect(state.repo, state.token); };
     $('search').addEventListener('input', event => { state.search = event.target.value.trim().toLocaleLowerCase('vi'); state.visible = 25; render(); });
@@ -404,7 +385,7 @@
       const file = event.target.files?.[0]; if (!file) return;
       try {
         const raw = JSON.parse(await file.text());
-        state.bank = takeBank(raw); state.selected = ''; state.visible = 25;
+        state.bank = HVUBank.merge(takeBank(raw), state.bank); state.dirty=true; state.revision++; state.selected = ''; state.visible = 25;
         state.exportedAt = raw.exportedAt || raw.exportDate || ''; state.connected = false;
         status(false); closeModal(); render(); await saveBankCache('local'); notice('Đã mở và tự lưu file JSON trên thiết bị này (chưa đưa lên GitHub).', true);
       } catch (e) { notice('Không thể mở JSON: ' + e.message, false); }
@@ -413,12 +394,12 @@
   }
   // Keep the open website up to date while the extension commits to GitHub.
   async function pollForUpdates() {
-    if (!state.connected || state.busy || document.hidden) return;
+    if (!state.connected || state.busy || document.hidden || state.page==='editor') return;
     state.busy = true;
     try {
       const fresh = await loadFromGitHub(state.repo, state.token);
       if ((fresh.exportedAt || '') !== state.exportedAt) {
-        state.bank = takeBank(fresh);
+        state.bank = HVUBank.merge(takeBank(fresh), state.bank);
         state.exportedAt = fresh.exportedAt || '';
         if (state.selected && !state.bank[state.selected]) state.selected = '';
         render();await saveBankCache('github');
@@ -428,11 +409,12 @@
       notice('Không thể tự làm mới: ' + String(e.message || e), false);
     } finally { state.busy = false; }
   }
+  window.BankApp = { state, safe, names, qs, renderMedia, hydrateImages, notice, render, switchPage, saveBankCache, openModal, status };
   setInterval(pollForUpdates, 90 * 1000);
   bind();render();status(false);switchPage(state.page);
   if (state.repo) $('repo-input').value=state.repo;
   // Khôi phục bản cục bộ trước, sau đó mới tìm bản mới từ GitHub.
   restoreCache().then(() => {
-    if (state.repo && state.token) connect(state.repo,state.token);
+    if (state.repo) connect(state.repo,state.token);
   });
 })();
