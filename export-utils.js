@@ -1,4 +1,4 @@
-// Giữ chuẩn Word (.docx) và Excel (.xlsx) từ tiện ích gốc.
+// Bộ xuất Word (.docx, nhúng ảnh, đánh dấu đáp án đúng) và Excel (.xlsx) — đồng bộ với tiện ích V4.5.
 function hvuGenerateId() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
 }
@@ -9,6 +9,205 @@ function escapeH(t) {
 
 function escapeAttr(t) {
     return String(t || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ---------------------------------------------------------------------------
+// Nhúng ảnh vào DOCX.
+// Word chỉ đọc chắc chắn PNG/JPEG/GIF/BMP trong gói OOXML, nên ảnh lạ
+// (webp, avif, svg...) sẽ được background chuyển sang PNG trước khi trả về.
+// ---------------------------------------------------------------------------
+var HVU_DOCX_MAX_IMG_CX = 5486400;   // 6 inch, tính bằng EMU
+var HVU_DOCX_MAX_IMG_CY = 7315200;   // 8 inch
+var HVU_DOCX_EMU_PER_PX = 9525;      // 96 dpi
+
+function _hvuBase64ToBytes(b64) {
+    var clean = String(b64 || '').replace(/^data:[^,]*;base64,/, '').replace(/\s+/g, '');
+    if (!clean) return null;
+    var bin;
+    try { bin = atob(clean); } catch (e) { return null; }
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) & 0xFF;
+    return out;
+}
+
+function _hvuJpegSize(b) {
+    var i = 2;
+    while (i < b.length - 9) {
+        if (b[i] !== 0xFF) { i++; continue; }
+        var marker = b[i + 1];
+        if (marker === 0xFF) { i++; continue; }   // byte đệm 0xFF
+        if (marker === 0xD8 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) { i += 2; continue; }
+        var len = (b[i + 2] << 8) | b[i + 3];
+        if (len < 2) break;
+        if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+            return { width: (b[i + 7] << 8) | b[i + 8], height: (b[i + 5] << 8) | b[i + 6] };
+        }
+        i += 2 + len;
+    }
+    return { width: 0, height: 0 };
+}
+
+// Nhận dạng ảnh từ magic bytes; trả null nếu Word không đọc được.
+function _hvuImageInfoFromBytes(bytes) {
+    if (!bytes || bytes.length < 12) return null;
+    var w = 0, h = 0, ext = '', mime = '';
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+        ext = 'png'; mime = 'image/png';
+        w = ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0;
+        h = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
+    } else if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
+        ext = 'jpg'; mime = 'image/jpeg';
+        var size = _hvuJpegSize(bytes);
+        w = size.width; h = size.height;
+    } else if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+        ext = 'gif'; mime = 'image/gif';
+        w = bytes[6] | (bytes[7] << 8);
+        h = bytes[8] | (bytes[9] << 8);
+    } else if (bytes[0] === 0x42 && bytes[1] === 0x4D) {
+        ext = 'bmp'; mime = 'image/bmp';
+        w = bytes[18] | (bytes[19] << 8) | (bytes[20] << 16) | (bytes[21] << 24);
+        h = Math.abs(bytes[22] | (bytes[23] << 8) | (bytes[24] << 16) | (bytes[25] << 24));
+    } else {
+        return null;
+    }
+    if (!(w > 0) || !(h > 0)) { w = 600; h = 400; }
+    return { bytes: bytes, ext: ext, mime: mime, width: w, height: h };
+}
+
+// Tên file hiển thị khi ảnh không nhúng được. ID nội bộ và key S3 là vô nghĩa
+// với người đọc nên chỉ in "[Hình ảnh]".
+function _hvuImageFallbackLabel(src) {
+    var name = '';
+    try {
+        var clean = String(src || '').split('?')[0].split('#')[0];
+        name = decodeURIComponent(clean.split('/').pop() || '');
+    } catch (e) { name = ''; }
+    var bare = !name;
+    if (name) {
+        var stem = name.replace(/\.[a-z0-9]{1,5}$/i, '');
+        if (/^\d+$/.test(stem)) bare = true;                               // 291400
+        else if (/^[a-z]?\d{2,}[a-z0-9]{6,}$/i.test(stem)) bare = true;    // s144untfqeujk69f9670738uo
+        else if (/^[0-9a-f]{16,}$/i.test(stem)) bare = true;               // hash
+    }
+    if (bare) return '[Hình ảnh]';
+    return '[Hình ảnh: ' + name.substring(0, 60) + ']';
+}
+
+// Dựng thẻ <w:drawing> nhúng ảnh, kèm đăng ký phần media + relationship.
+function _hvuMakeImageRun(src, imageMap, ctx) {
+    var info = imageMap && imageMap[src];
+    if (!info || !info.bytes || !info.bytes.length) return '';
+
+    var relId = ctx.srcToRel[src];
+    var fileName = '';
+    if (!relId) {
+        ctx.imgIndex += 1;
+        relId = 'rIdImg' + ctx.imgIndex;
+        fileName = 'image' + ctx.imgIndex + '.' + (info.ext || 'png');
+        ctx.srcToRel[src] = relId;
+        ctx.images.push({ relId: relId, fileName: fileName, bytes: info.bytes, ext: info.ext || 'png' });
+    } else {
+        var rec = ctx.images.filter(function (r) { return r.relId === relId; })[0];
+        fileName = rec ? rec.fileName : 'image';
+    }
+
+    var cx = info.width * HVU_DOCX_EMU_PER_PX;
+    var cy = info.height * HVU_DOCX_EMU_PER_PX;
+    var scale = 1;
+    if (cx > HVU_DOCX_MAX_IMG_CX) scale = HVU_DOCX_MAX_IMG_CX / cx;
+    if (cy * scale > HVU_DOCX_MAX_IMG_CY) scale = Math.min(scale, HVU_DOCX_MAX_IMG_CY / cy);
+    cx = Math.max(1, Math.round(cx * scale));
+    cy = Math.max(1, Math.round(cy * scale));
+
+    ctx.docPrId += 1;
+    var id = ctx.docPrId;
+
+    return '<w:r><w:drawing>'
+        + '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+        + '<wp:extent cx="' + cx + '" cy="' + cy + '"/>'
+        + '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        + '<wp:docPr id="' + id + '" name="Picture ' + id + '"/>'
+        + '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+        + '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        + '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        + '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        + '<pic:nvPicPr><pic:cNvPr id="' + id + '" name="' + _hvuEscXml(fileName) + '"/><pic:cNvPicPr/></pic:nvPicPr>'
+        + '<pic:blipFill><a:blip r:embed="' + relId + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+        + '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm>'
+        + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+        + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+}
+
+// Gom toàn bộ src ảnh trong một chuỗi HTML, giữ nguyên thứ tự xuất hiện.
+function _hvuCollectImageSources(html) {
+    var srcs = [];
+    try {
+        var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+        var imgs = doc.querySelectorAll('img[src]');
+        var seen = Object.create(null);
+        for (var i = 0; i < imgs.length; i++) {
+            var src = imgs[i].getAttribute('src') || '';
+            if (!src || seen[src]) continue;
+            seen[src] = true;
+            srcs.push(src);
+        }
+    } catch (e) { }
+    return srcs;
+}
+
+// Tách fileId từ src ảnh: .../api/aws/file/291400 hoặc dạng số trần .../291400.
+function _hvuFileIdFromSrc(src) {
+    var s = String(src || '');
+    var m = s.match(/\/file\/(\d+)/);
+    if (m) return m[1];
+    var clean = s.split('?')[0].split('#')[0];
+    var last = clean.split('/').pop() || '';
+    m = last.match(/^(\d{3,})(?:\.[a-z0-9]{1,5})?$/i);
+    return m ? m[1] : '';
+}
+
+// ---------------------------------------------------------------------------
+// Website: ảnh lấy từ thư mục images/ trong repo dữ liệu GitHub (do tiện ích đẩy lên).
+// app.js khai báo window.hvuWebImages = { bytes(src) -> Promise<Uint8Array|null> }.
+// ---------------------------------------------------------------------------
+function _hvuResolveImageBytes(src) {
+    var provider = (typeof window !== 'undefined') && window.hvuWebImages;
+    if (!provider || !_hvuFileIdFromSrc(src)) return Promise.resolve(null);
+    return provider.bytes(src).then(function (bytes) {
+        return bytes && bytes.length ? _hvuImageInfoFromBytes(bytes) : null;
+    }).catch(function () { return null; });
+}
+
+// Tải ảnh song song (tối đa 4) và dựng map { src: {bytes, ext, width, height} }.
+function _hvuLoadImageMap(html, onProgress) {
+    var srcs = _hvuCollectImageSources(html);
+    var map = Object.create(null);
+    if (!srcs.length) return Promise.resolve(map);
+
+    return new Promise(function (resolve) {
+        var nextIdx = 0;
+        var done = 0;
+        var LIMIT = 4;
+
+        function pump() {
+            if (nextIdx >= srcs.length) return;
+            var src = srcs[nextIdx++];
+            _hvuResolveImageBytes(src)
+                .catch(function () { return null; })
+                .then(function (info) {
+                    if (info) map[src] = info;
+                    else map[src] = null;
+                    done += 1;
+                    if (onProgress) {
+                        try { onProgress(done, srcs.length); } catch (e) { }
+                    }
+                    if (done >= srcs.length) resolve(map);
+                    else pump();
+                });
+        }
+
+        for (var i = 0; i < Math.min(LIMIT, srcs.length); i++) pump();
+    });
 }
 
 function renderMediaHtml(media, context) {
@@ -25,7 +224,7 @@ function renderMediaHtml(media, context) {
                 html += '<div class="hvu-media-item"><img src="' + escapeAttr(m.src) + '" class="hvu-media-img'
                     + (isPopup ? ' hvu-media-sm' : '') + '" loading="lazy"'
                     + ' data-hvu-fallback />'
-                    + '<div class="hvu-media-fallback" style="display:none">' + (typeof hvuIcon === 'function' ? hvuIcon('image', 14) : '[IMG]') + ' ' + escapeH(m.src.split('/').pop().substring(0, 40)) + '</div></div>';
+                    + '<div class="hvu-media-fallback" style="display:none">' + (typeof hvuIcon === 'function' ? hvuIcon('image', 14) : '[IMG]') + ' ' + escapeH(_hvuImageFallbackLabel(m.src)) + '</div></div>';
             }
         } else if (m.type === 'video') {
             if (isWord) {
@@ -73,6 +272,51 @@ function renderMediaText(media) {
     return lines;
 }
 
+// ---------------------------------------------------------------------------
+// Đáp án đúng đã được xác nhận.
+// LMS không trả về đáp án đúng, chỉ trả điểm. Chỉ khi điểm tuyệt đối (100%) thì mọi
+// đáp án đã chọn mới chắc chắn đúng. Điểm thấp hơn thì không thể biết câu nào sai nên
+// không được ghi đáp án nào là "đúng".
+// ---------------------------------------------------------------------------
+function hvuIsPerfectScore(sc) {
+    if (!sc) return false;
+    if (sc.perfect === true) return true;
+    if (sc.perfect === false) return false;
+    // Điểm cũ lưu trước phiên bản 4.4 chưa có cờ perfect: chỉ tin khi đủ 100 điểm.
+    var total = Number(sc.total) || 0;
+    var correct = Number(sc.correct) || 0;
+    return Number(sc.value) >= 100 && (!total || correct >= total);
+}
+
+function _hvuNormOpt(t) {
+    return String(t == null ? '' : t).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Vị trí (từ 0) của đáp án đúng trong q.options, hoặc -1 nếu chưa biết.
+// Ưu tiên theo id lựa chọn; không có thì so theo nội dung chữ.
+function hvuCorrectIndex(q) {
+    if (!q || !Array.isArray(q.options)) return -1;
+    var opts = q.options, i, o;
+    if (q.correctId !== undefined && q.correctId !== null && q.correctId !== '') {
+        for (i = 0; i < opts.length; i++) {
+            o = opts[i];
+            if (o && typeof o === 'object' && String(o.id) === String(q.correctId)) return i;
+        }
+    }
+    var want = _hvuNormOpt(q.correctAnswer);
+    if (want) {
+        for (i = 0; i < opts.length; i++) {
+            o = opts[i];
+            var v = (o && typeof o === 'object') ? o.value : o;
+            if (_hvuNormOpt(v) === want) return i;
+        }
+    }
+    return -1;
+}
+
+var HVU_CORRECT_MARK = ' \u2713 \u0110\u00DANG';
+var HVU_CORRECT_STYLE = 'color:#0f9d6c;font-weight:bold';
+
 function generateWordHtml(questions, title) {
     var h = '<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">'
         + '<head><meta charset="UTF-8"><style>'
@@ -88,11 +332,15 @@ function generateWordHtml(questions, title) {
     questions.forEach(function (q, i) {
         h += '<div class="q">Câu ' + (i + 1) + ': ' + escapeH(q.text) + '</div>';
         h += renderMediaHtml(q.media, 'word');
+        var correctIdx = hvuCorrectIndex(q);
         (q.options || []).forEach(function (o, j) {
             var val = typeof o === 'object' ? o.value : o;
             var oMedia = typeof o === 'object' ? o.media : null;
             var hasMedia = oMedia && oMedia.length > 0;
-            h += '<div class="o">' + String.fromCharCode(65 + j) + '. ' + escapeH(val || (hasMedia ? '' : '—')) + '</div>';
+            var isRight = j === correctIdx;
+            h += '<div class="o"' + (isRight ? ' style="' + HVU_CORRECT_STYLE + '"' : '') + '>'
+                + String.fromCharCode(65 + j) + '. ' + escapeH(val || (hasMedia ? '' : '—'))
+                + (isRight ? HVU_CORRECT_MARK : '') + '</div>';
             h += renderMediaHtml(oMedia, 'word');
         });
     });
@@ -172,7 +420,8 @@ function _hvuEscXml(s) {
     return String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-function _hvuHtmlToOoxmlBody(html) {
+function _hvuHtmlToOoxmlBody(html, imageMap, imageCtx) {
+    imageCtx = imageCtx || { images: [], srcToRel: Object.create(null), imgIndex: 0, docPrId: 0 };
     var parser = new DOMParser();
     var doc = parser.parseFromString(String(html || ''), 'text/html');
     var body = doc.body;
@@ -276,8 +525,10 @@ function _hvuHtmlToOoxmlBody(html) {
         var props = applyNodeProps(node, inherited);
         if (tag === 'img') {
             var src = node.getAttribute('src') || '';
-            var fname = src.split('/').pop().split('?')[0].substring(0, 60);
-            return makeRun('[Hình ảnh' + (fname ? ': ' + fname : '') + ']', { b: false, i: true, u: true, c: '0563C1', sz: props.sz });
+            // Nhúng ảnh thật nếu đã tải được bytes; nếu không, in nhãn thay vì ID/khóa S3 thô.
+            var picture = _hvuMakeImageRun(src, imageMap, imageCtx);
+            if (picture) return picture;
+            return makeRun(_hvuImageFallbackLabel(src), { b: false, i: true, u: false, c: '0563C1', sz: props.sz });
         }
         if (tag === 'audio' || tag === 'video') {
             return makeRun(tag === 'audio' ? '[Âm thanh]' : '[Video]', { b: false, i: true, u: false, c: '0563C1', sz: props.sz });
@@ -369,13 +620,32 @@ function _hvuHtmlToOoxmlBody(html) {
         var isContainer = structural || (tag === 'div' && hasBlockChild(el)) || (tagIsBlock && hasBlockChild(el));
 
         if (isContainer) {
-            if (hasDirectInlineContent(el)) emitPara(collectDirectRuns(el, props), { spacing: { before: 0, after: 80 } });
-            for (var ci = 0; ci < el.children.length; ci++) processEl(el.children[ci], props);
+            var inlineDone = hasDirectInlineContent(el);
+            if (inlineDone) {
+                var directRuns = collectDirectRuns(el, props);
+                var onlyPicture = directRuns.indexOf('<w:drawing>') !== -1 && directRuns.indexOf('<w:t') === -1;
+                emitPara(directRuns, onlyPicture ? { align: 'center', spacing: { before: 60, after: 100 } } : { spacing: { before: 0, after: 80 } });
+            }
+            var blockList = ['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'article', 'main', 'header', 'footer', 'blockquote', 'table', 'tr', 'td', 'th', 'ul', 'ol', 'hr', 'tbody', 'thead', 'tfoot'];
+            for (var ci = 0; ci < el.children.length; ci++) {
+                var child = el.children[ci];
+                // Phần inline (img, span...) đã nằm trong đoạn ở trên; duyệt lại sẽ nhân đôi ảnh.
+                if (inlineDone && blockList.indexOf(child.tagName.toLowerCase()) === -1) continue;
+                processEl(child, props);
+            }
             return;
         }
 
         if (tag === 'img' || tag === 'video' || tag === 'audio') {
             emitPara(collectRuns(el, inherited || { b: false, i: false, u: false, c: null, sz: null }), { spacing: { before: 40, after: 80 } });
+            return;
+        }
+
+        // Khối chỉ chứa ảnh (vd. <div class="hvu-media-item"><img>...</div>): căn giữa cho dễ nhìn.
+        if (tag === 'div' && el.querySelector('img') && !el.textContent.replace(/\s+/g, '').length) {
+            var picRuns = '';
+            for (var pi = 0; pi < el.childNodes.length; pi++) picRuns += collectRuns(el.childNodes[pi], props);
+            if (picRuns) emitPara(picRuns, { align: 'center', spacing: { before: 60, after: 100 } });
             return;
         }
 
@@ -438,13 +708,19 @@ function _hvuHtmlToOoxmlBody(html) {
     return xml;
 }
 
-function _hvuBuildDocx(html) {
-    var bodyXml = _hvuHtmlToOoxmlBody(html);
+function _hvuBuildDocx(html, imageMap) {
+    var imageCtx = { images: [], srcToRel: Object.create(null), imgIndex: 0, docPrId: 0 };
+    var bodyXml = _hvuHtmlToOoxmlBody(html, imageMap, imageCtx);
 
     var contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         + '<Default Extension="xml" ContentType="application/xml"/>'
+        + '<Default Extension="png" ContentType="image/png"/>'
+        + '<Default Extension="jpg" ContentType="image/jpeg"/>'
+        + '<Default Extension="jpeg" ContentType="image/jpeg"/>'
+        + '<Default Extension="gif" ContentType="image/gif"/>'
+        + '<Default Extension="bmp" ContentType="image/bmp"/>'
         + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
         + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
         + '</Types>';
@@ -457,6 +733,11 @@ function _hvuBuildDocx(html) {
     var docRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        + imageCtx.images.map(function (img) {
+            return '<Relationship Id="' + img.relId + '"'
+                + ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"'
+                + ' Target="media/' + img.fileName + '"/>';
+        }).join('')
         + '</Relationships>';
 
     var documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -503,25 +784,39 @@ function _hvuBuildDocx(html) {
         { name: 'word/styles.xml', data: enc(stylesXml) }
     ];
 
+    imageCtx.images.forEach(function (img) {
+        zipFiles.push({ name: 'word/media/' + img.fileName, data: img.bytes });
+    });
+
     var zipData = _hvuCreateZip(zipFiles);
-    return new Blob([zipData], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    return {
+        blob: new Blob([zipData], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+        imageCount: imageCtx.images.length
+    };
 }
 
-function downloadWord(html, filename) {
-    var url = null;
-    var a = null;
-    try {
-        var blob = _hvuBuildDocx(html);
-        url = URL.createObjectURL(blob);
-        a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-    } finally {
-        if (a && a.parentNode) document.body.removeChild(a);
-        if (url) setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
-    }
+function _hvuSaveBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    if (a.parentNode) document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+}
+
+// Trả về Promise<{ images, total }>: tải hết ảnh rồi mới dựng DOCX để ảnh
+// nằm thật trong file thay vì chỉ là nhãn chữ.
+function downloadWord(html, filename, options) {
+    options = options || {};
+    return _hvuLoadImageMap(html, options.onProgress)
+        .catch(function () { return Object.create(null); })
+        .then(function (imageMap) {
+            var built = _hvuBuildDocx(html, imageMap);
+            _hvuSaveBlob(built.blob, filename);
+            return { images: built.imageCount, total: imageMap ? Object.keys(imageMap).length : 0 };
+        });
 }
 
 
@@ -577,21 +872,30 @@ function _hvuExcelCellRef(colIndex, rowIndex) {
 
 function _hvuExcelWorksheetXml(questions) {
     var headers = ['NỘI DUNG CÂU HỎI', 'LỰA CHỌN A', 'LỰA CHỌN B', 'LỰA CHỌN C', 'LỰA CHỌN D'];
+    // Thêm cột đáp án (1/2/3/4 = A/B/C/D) chỉ khi sheet có câu đã biết đáp án đúng,
+    // để file không đổi bố cục với những môn chưa có đáp án.
+    var hasAnswers = (questions || []).some(function (q) { return hvuCorrectIndex(q) >= 0; });
+    var lastCol = hasAnswers ? 'F' : 'E';
+    if (hasAnswers) headers.push('ĐÁP ÁN ĐÚNG');
     var rows = [headers];
     (questions || []).forEach(function (q) {
         q = q || {};
         var options = q.options || [];
         var row = [_hvuExcelQuestionCell(q)];
         for (var i = 0; i < 4; i++) row.push(_hvuExcelOptionCell(options[i]));
+        if (hasAnswers) {
+            var ci = hvuCorrectIndex(q);
+            row.push(ci >= 0 && ci < 4 ? String(ci + 1) : '');
+        }
         rows.push(row);
     });
 
     var sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        + '<dimension ref="A1:E' + rows.length + '"/>'
+        + '<dimension ref="A1:' + lastCol + rows.length + '"/>'
         + '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>'
         + '<sheetFormatPr defaultRowHeight="18"/>'
-        + '<cols><col min="1" max="1" width="62" customWidth="1"/><col min="2" max="5" width="42" customWidth="1"/></cols>'
+        + '<cols><col min="1" max="1" width="62" customWidth="1"/><col min="2" max="5" width="42" customWidth="1"/>' + (hasAnswers ? '<col min="6" max="6" width="16" customWidth="1"/>' : '') + '</cols>'
         + '<sheetData>';
     rows.forEach(function (row, ri) {
         var rowNo = ri + 1;
@@ -603,7 +907,7 @@ function _hvuExcelWorksheetXml(questions) {
         });
         sheet += '</row>';
     });
-    sheet += '</sheetData><autoFilter ref="A1:E' + rows.length + '"/><pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>';
+    sheet += '</sheetData><autoFilter ref="A1:' + lastCol + rows.length + '"/><pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>';
     return sheet;
 }
 
@@ -680,5 +984,5 @@ function downloadExcel(questions, filename, sheetName) {
     downloadExcelWorkbook([{ name: sheetName || 'Câu hỏi', questions: questions || [] }], filename || 'CauHoi_HVU.xlsx');
 }
 
-var HVU_SYNC_KEY = 'HVU2025@Sync';
 
+var HVU_SYNC_KEY = 'HVU2025@Sync';

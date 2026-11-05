@@ -127,6 +127,8 @@
           options: Array.isArray(q.options) ? q.options : [],
           media: Array.isArray(q.media) ? q.media : [],
           correctAnswer: q.correctAnswer,
+          correctId: q.correctId == null ? '' : String(q.correctId),
+          answerVerifiedAt: Number(q.answerVerifiedAt) || 0,
           answer: q.answer
         })),
         lastUpdated: Number(item.lastUpdated) || 0,
@@ -149,6 +151,7 @@
       state.selected = ''; state.visible = 25; state.connected = true;
       persistAuth();
       status(true); closeModal(); render();
+      loadImageIndex(true).then(hydrateImages);
       await saveBankCache('github');
       notice('Đã tải thành công ' + fmt(total()) + ' câu hỏi từ ' + repo + '.', true);
     } catch (e) {
@@ -166,6 +169,89 @@
     setTimeout(() => $('repo-input').focus(), 20);
   }
   function closeModal() { $('settings-backdrop').classList.add('hidden'); }
+  // ---------------------------------------------------------------------------
+  // Ảnh câu hỏi: link ảnh gốc của LMS cần đăng nhập nên không mở được trên web.
+  // Tiện ích đẩy ảnh vào thư mục images/ của repo dữ liệu (images/index.json ghi
+  // fileId -> tên file). Repo dữ liệu private nên đọc bằng chính token đã nhập.
+  // Tên file là mã băm nội dung, không bao giờ đổi nội dung -> lưu cache lâu dài.
+  // ---------------------------------------------------------------------------
+  const IMG_INDEX_PATH = 'images/index.json';
+  const IMG_INDEX_LOCAL = 'khaidev_img_index_v1';
+  const IMG_CACHE = 'khaidev-images-v1';
+  const imgState = { index: null, repo: '', fetchedAt: 0, urls: new Map(), loading: null };
+
+  function apiHeaders(accept) {
+    return Object.assign({ Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' }, state.token ? { Authorization: 'Bearer ' + state.token } : {});
+  }
+  async function loadImageIndex(force) {
+    if (!state.repo) return {};
+    const fresh = imgState.index && imgState.repo === state.repo && (Date.now() - imgState.fetchedAt < 60000);
+    if (!force && imgState.index && imgState.repo === state.repo) return imgState.index;
+    if (fresh) return imgState.index;
+    if (imgState.loading) return imgState.loading;
+    imgState.loading = (async () => {
+      let files = null;
+      try {
+        const root = 'https://api.github.com/repos/' + state.repo;
+        const info = await request(root + '/contents/' + IMG_INDEX_PATH, state.token);
+        const blob = info.content ? info : await request(root + '/git/blobs/' + encodeURIComponent(info.sha), state.token);
+        files = (JSON.parse(decodeBase64(blob.content)) || {}).files || {};
+        try { localStorage.setItem(IMG_INDEX_LOCAL, JSON.stringify({ repo: state.repo, files })); } catch (_) {}
+      } catch (e) {
+        // Chưa có images/ (404), mất mạng hoặc token chưa nhập: dùng bản index đã lưu trên máy.
+        try { const c = JSON.parse(localStorage.getItem(IMG_INDEX_LOCAL) || 'null'); if (c && c.repo === state.repo) files = c.files; } catch (_) {}
+      }
+      imgState.index = files || {}; imgState.repo = state.repo; imgState.fetchedAt = Date.now();
+      return imgState.index;
+    })();
+    try { return await imgState.loading; } finally { imgState.loading = null; }
+  }
+  const mimeOf = name => ({ png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' })[String(name).split('.').pop()] || 'application/octet-stream';
+  async function imageBytesByName(name) {
+    const key = 'https://khaidev.local/img/' + encodeURIComponent(name);
+    try { const c = await caches.open(IMG_CACHE); const hit = await c.match(key); if (hit) return new Uint8Array(await hit.arrayBuffer()); } catch (_) {}
+    if (!state.repo) return null;
+    const res = await fetch('https://api.github.com/repos/' + state.repo + '/contents/images/' + encodeURIComponent(name), { headers: apiHeaders('application/vnd.github.raw+json') });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    try { const c = await caches.open(IMG_CACHE); await c.put(key, new Response(buf.slice(0), { headers: { 'content-type': mimeOf(name) } })); } catch (_) {}
+    return new Uint8Array(buf);
+  }
+  async function imageNameForSrc(src) {
+    const id = _hvuFileIdFromSrc(src);
+    if (!id) return '';
+    let index = await loadImageIndex(false);
+    if (!index[id]) index = await loadImageIndex(true);      // có thể vừa được đẩy lên
+    return index[id] || '';
+  }
+  window.hvuWebImages = {
+    bytes: async src => { const name = await imageNameForSrc(src); return name ? imageBytesByName(name) : null; },
+    url: async src => {
+      const name = await imageNameForSrc(src);
+      if (!name) return '';
+      if (imgState.urls.has(name)) return imgState.urls.get(name);
+      const bytes = await imageBytesByName(name);
+      if (!bytes) return '';
+      const url = URL.createObjectURL(new Blob([bytes], { type: mimeOf(name) }));
+      imgState.urls.set(name, url);
+      return url;
+    }
+  };
+  // Gắn ảnh thật vào các thẻ <img data-hvu-src> sau mỗi lần vẽ danh sách.
+  function hydrateImages() {
+    document.querySelectorAll('img[data-hvu-src]').forEach(img => {
+      const src = img.getAttribute('data-hvu-src');
+      img.removeAttribute('data-hvu-src');
+      window.hvuWebImages.url(src).then(url => {
+        if (url) { img.src = url; img.classList.remove('img-wait'); return; }
+        const note = document.createElement('div');
+        note.className = 'img-missing';
+        note.textContent = state.token || state.repo ? 'Ảnh chưa có trên GitHub — mở câu này trên LMS rồi đồng bộ từ tiện ích.' : 'Nhập repo/token để xem ảnh.';
+        img.replaceWith(note);
+      }).catch(() => { img.classList.remove('img-wait'); });
+    });
+  }
+
   function mediaUrl(input) {
     try {
       const url = new URL(String(input), window.location.href);
@@ -178,7 +264,11 @@
       if (!item || typeof item !== 'object') return '';
       const uri = mediaUrl(item.src);
       if (!uri) return '';
-      if (item.type === 'image') return '<img loading="lazy" referrerpolicy="no-referrer" src="' + safe(uri) + '" alt="Hình minh họa câu hỏi">';
+      if (item.type === 'image') {
+        // Ảnh của LMS (có fileId) lấy từ images/ trên GitHub; ảnh ngoài thì giữ link gốc.
+        if (_hvuFileIdFromSrc(item.src)) return '<img class="img-wait" data-hvu-src="' + safe(String(item.src)) + '" alt="Hình minh họa câu hỏi">';
+        return '<img loading="lazy" referrerpolicy="no-referrer" src="' + safe(uri) + '" alt="Hình minh họa câu hỏi">';
+      }
       return '<a href="' + safe(uri) + '" target="_blank" rel="noopener noreferrer">↗ ' + safe(item.type || 'Tệp đính kèm') + '</a>';
     }).filter(Boolean).join('');
     return html ? '<div class="q-media">' + html + '</div>' : '';
@@ -191,10 +281,12 @@
       '<div class="action">Xem ngân hàng câu hỏi <span>→</span></div></article>';
   }
   function renderQuestion(q, i) {
+    const right = hvuCorrectIndex(q);   // -1 nếu chưa có đáp án đã xác nhận (chỉ có khi từng đạt 100%)
     const options = (q.options || []).slice(0, 10).map((option,j) => {
       const value = typeof option === 'object' && option !== null ? option.value || '' : option;
       const suffix = typeof option === 'object' && option !== null ? renderMedia(option.media) : '';
-      return '<div class="option"><span class="letter">' + String.fromCharCode(65 + j) + '.</span><div>' + safe(value) + suffix + '</div></div>';
+      const ok = j === right;
+      return '<div class="option' + (ok ? ' correct' : '') + '"><span class="letter">' + String.fromCharCode(65 + j) + '.</span><div>' + safe(value) + suffix + '</div>' + (ok ? '<span class="tick">✓ Đáp án đúng</span>' : '') + '</div>';
     }).join('');
     return '<article class="question"><p class="question-title"><span class="n">Câu ' + (i+1) + ':</span> ' + safe(q.text) + '</p>' + renderMedia(q.media) + '<div class="options">' + options + '</div></article>';
   }
@@ -227,6 +319,7 @@
     }
     $('export-word').disabled = !all.length;
     $('export-excel').disabled = !all.length;
+    hydrateImages();
   }
   function choose(name) {
     state.selected = name; state.visible = 25;
@@ -238,29 +331,34 @@
     const wanted = names().filter(n => !state.search || n.toLocaleLowerCase('vi').includes(state.search) || qs(n).some(matches));
     return wanted.map(name => ({name, questions: qs(name)}));
   }
-  function downloadDocx() {
+  async function downloadDocx() {
     const rows = exportRows();
     if (!rows.length) return notice('Không có câu hỏi để xuất.', false);
     try {
+      notice('Đang tạo file Word và nhúng ảnh…', true);
+      let result;
       if (rows.length === 1) {
         const row = rows[0];
-        downloadWord(generateWordHtml(row.questions, row.name), 'NganHang_' + fname(row.name) + '.docx');
+        result = await downloadWord(generateWordHtml(row.questions, row.name), 'NganHang_' + fname(row.name) + '.docx');
       } else {
         let html = '<html><head><meta charset="UTF-8"></head><body><h1 style="text-align:center">NGÂN HÀNG CÂU HỎI HVU</h1>';
         rows.forEach((row, i) => {
           html += '<h2 style="background:#dbeafe;color:#1d4ed8;margin-top:28px;padding:10px;page-break-before:' + (i ? 'always' : 'auto') + '">' + safe(row.name) + ' (' + row.questions.length + ' câu)</h2>';
           row.questions.forEach((q,j) => {
+            const right = hvuCorrectIndex(q);
             html += '<p style="font-weight:bold;margin-top:15px">Câu ' + (j+1) + ': ' + safe(q.text) + '</p>';
             html += renderMediaHtml(q.media, 'word');
             (q.options || []).forEach((o,k) => {
-              html += '<p style="margin-left:26px">' + String.fromCharCode(65+k) + '. ' + safe(typeof o === 'object' && o ? o.value : o) + '</p>';
+              html += '<p style="margin-left:26px' + (k === right ? ';' + HVU_CORRECT_STYLE : '') + '">' + String.fromCharCode(65+k) + '. ' + safe(typeof o === 'object' && o ? o.value : o) + (k === right ? HVU_CORRECT_MARK : '') + '</p>';
               if (o && typeof o === 'object') html += renderMediaHtml(o.media, 'word');
             });
           });
         });
-        downloadWord(html + '</body></html>', 'NganHang_TatCa_' + rows.length + 'mon.docx');
+        result = await downloadWord(html + '</body></html>', 'NganHang_TatCa_' + rows.length + 'mon.docx');
       }
-      notice('Đã tạo file Word.', true);
+      const missing = result && result.total ? result.total - result.images : 0;
+      notice('Đã tạo file Word' + (result && result.total ? ' (nhúng ' + result.images + '/' + result.total + ' ảnh)' : '') + '.' +
+        (missing > 0 ? ' ' + missing + ' ảnh chưa có trên GitHub: mở câu đó trên LMS rồi đồng bộ từ tiện ích.' : ''), missing === 0);
     } catch (e) { notice('Xuất Word thất bại: ' + e.message, false); }
   }
   function downloadXlsx() {

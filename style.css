@@ -119,3 +119,11 @@ body{background:radial-gradient(1200px 600px at 100% -10%,#e3efff 0%,transparent
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}.stat:hover,.subject-card:hover,.btn:hover{transform:none}}
 
 @media(max-width:560px){.hero{border-radius:18px}.question{padding:16px}.q-media img{max-height:200px}}
+
+/* Đáp án đúng (chỉ hiện khi câu từng đạt 100% và đã được tiện ích xác nhận) */
+.option.correct{background:#e8f8f0;border-color:#8fd8b4;color:#0b6b46}
+.option.correct .letter{background:#bdeed6;color:#0b6b46}
+.option .tick{margin-left:auto;align-self:center;font-size:11.5px;font-weight:700;color:#0f9d6c;white-space:nowrap;padding-left:10px}
+/* Ảnh tải từ GitHub */
+.q-media img.img-wait{min-height:56px;min-width:96px;background:linear-gradient(90deg,#eef5ff,#f8fbff,#eef5ff)}
+.img-missing{padding:10px 14px;border:1px dashed #c4dafa;border-radius:12px;background:#f7faff;color:#58728f;font-size:12.5px}
